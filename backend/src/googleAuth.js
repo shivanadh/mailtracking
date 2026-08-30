@@ -37,16 +37,18 @@ async function saveSettings(settings) {
   }
 }
 
-async function getOAuth2Client() {
+async function getOAuth2Client(overrideRedirectUri) {
   const config = await getSettings();
   if (!config.clientId || !config.clientSecret) {
     return null;
   }
 
+  const redirectUri = overrideRedirectUri || config.redirectUri;
+
   const oauth2Client = new google.auth.OAuth2(
     config.clientId,
     config.clientSecret,
-    config.redirectUri
+    redirectUri
   );
 
   if (config.refreshToken) {
@@ -58,8 +60,8 @@ async function getOAuth2Client() {
   return oauth2Client;
 }
 
-async function generateAuthUrl() {
-  const oauth2Client = await getOAuth2Client();
+async function generateAuthUrl(overrideRedirectUri) {
+  const oauth2Client = await getOAuth2Client(overrideRedirectUri);
   if (!oauth2Client) {
     throw new Error('Google Client ID and Client Secret must be configured first.');
   }
@@ -77,8 +79,8 @@ async function generateAuthUrl() {
   });
 }
 
-async function handleAuthCallback(code) {
-  const oauth2Client = await getOAuth2Client();
+async function handleAuthCallback(code, overrideRedirectUri) {
+  const oauth2Client = await getOAuth2Client(overrideRedirectUri);
   if (!oauth2Client) {
     throw new Error('OAuth client not initialized.');
   }

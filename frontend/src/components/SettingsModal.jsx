@@ -51,7 +51,8 @@ export default function SettingsModal({ isOpen, onClose }) {
 
   const handleConnectGoogle = async () => {
     try {
-      const res = await fetch('/api/auth/google/url');
+      await handleSave();
+      const res = await fetch(`/api/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}`);
       const data = await res.json();
       if (data.url) {
         window.location.href = data.url;

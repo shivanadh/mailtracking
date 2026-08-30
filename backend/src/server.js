@@ -331,8 +331,12 @@ app.post('/api/settings', async (req, res) => {
 
 app.get('/api/auth/google/url', async (req, res) => {
   try {
-    const url = await generateAuthUrl();
-    res.json({ url });
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const defaultUri = process.env.REDIRECT_URI || `${protocol}://${host}/api/auth/google/callback`;
+    const redirectUri = req.query.redirectUri || defaultUri;
+    const url = await generateAuthUrl(redirectUri);
+    res.json({ url, redirectUriUsed: redirectUri });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -344,7 +348,10 @@ app.get('/api/auth/google/callback', async (req, res) => {
     if (!code) {
       return res.status(400).send('Missing authorization code');
     }
-    const userInfo = await handleAuthCallback(code);
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const currentCallbackUrl = process.env.REDIRECT_URI || `${protocol}://${host}/api/auth/google/callback`;
+    const userInfo = await handleAuthCallback(code, currentCallbackUrl);
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     res.send(`
       <html>
