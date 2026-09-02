@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Plus, Mail, Eye, MessageSquare, Clock, Zap, BarChart2, TrendingUp, 
-  Settings, RefreshCw, ChevronRight, Trash2, Shield, Users 
+  Settings, RefreshCw, ChevronRight, Trash2, Shield, Users,
+  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer
 } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 
 export default function Dashboard({ 
   campaigns, 
@@ -14,12 +15,30 @@ export default function Dashboard({
   onOpenSettingsModal 
 }) {
   const [syncing, setSyncing] = useState(false);
+  const [teamStats, setTeamStats] = useState(null);
+
+  useEffect(() => {
+    fetchTeamStats();
+  }, [campaigns]);
+
+  const fetchTeamStats = async () => {
+    try {
+      const res = await fetch('/api/stats/team');
+      if (res.ok) {
+        const data = await res.json();
+        setTeamStats(data);
+      }
+    } catch (err) {
+      console.error('Failed fetching team stats:', err);
+    }
+  };
 
   const handleSync = async () => {
     setSyncing(true);
     try {
       await fetch('/api/sync/replies', { method: 'POST' });
       await onRefresh();
+      await fetchTeamStats();
     } catch (e) {
       console.error(e);
     } finally {
@@ -35,6 +54,12 @@ export default function Dashboard({
 
   const overallOpenRate = totalRecipients ? Math.round((totalOpened / totalRecipients) * 100) : 0;
   const overallReplyRate = totalRecipients ? Math.round((totalReplied / totalRecipients) * 100) : 0;
+
+  // Donut chart dataset for Received vs Actioned vs Pending
+  const donutData = teamStats ? [
+    { name: 'Actioned', value: teamStats.total_actioned, color: '#10b981' },
+    { name: 'Pending', value: teamStats.total_pending, color: '#f59e0b' }
+  ] : [];
 
   // Chart data formatting
   const chartData = campaigns.slice(0, 10).reverse().map((c) => ({
@@ -83,6 +108,195 @@ export default function Dashboard({
             <Plus className="w-4 h-4" />
             <span>New Group Campaign</span>
           </button>
+        </div>
+      </div>
+
+      {/* Team Overall Stats / Received Vs Actioned Banner */}
+      <div className="glass-panel rounded-2xl p-6 border border-slate-800 bg-gradient-to-br from-slate-900/90 via-slate-900/60 to-slate-950/80 shadow-2xl relative overflow-hidden">
+        {/* Background glow accent */}
+        <div className="absolute -top-24 -right-24 w-72 h-72 bg-sky-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -left-24 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        {/* Banner Header */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-800/80 mb-5">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400">
+              <PieChartIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
+                <span>Team Overall Stats</span>
+                <span className="text-xs font-normal text-slate-400">|</span>
+                <span className="text-sky-400 font-semibold text-sm">Received vs Actioned</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Real-time team workload dispatch, resolution rates, & TAT benchmark performance
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              SLA Benchmark: 48 Hours
+            </span>
+          </div>
+        </div>
+
+        {/* Banner Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+          
+          {/* Donut Chart Column (4 cols) */}
+          <div className="lg:col-span-4 bg-slate-950/60 rounded-2xl p-4 border border-slate-800/80 flex flex-col items-center justify-center relative min-h-[220px]">
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1 flex items-center gap-1.5">
+              <BarChart3 className="w-3.5 h-3.5 text-sky-400" /> Actioned Ratio Donut
+            </div>
+
+            {teamStats && teamStats.total_received > 0 ? (
+              <div className="relative w-full h-44 flex items-center justify-center">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={donutData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={52}
+                      outerRadius={75}
+                      paddingAngle={5}
+                      dataKey="value"
+                      stroke="none"
+                    >
+                      {donutData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '0.75rem', color: '#fff', fontSize: '12px' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                
+                {/* Center text inside Donut */}
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                  <span className="text-2xl font-extrabold text-white">{teamStats.actioned_percent}%</span>
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold">Actioned</span>
+                </div>
+              </div>
+            ) : (
+              <div className="h-44 flex items-center justify-center text-xs text-slate-500">
+                No email data yet
+              </div>
+            )}
+
+            {/* Donut Legend */}
+            <div className="flex items-center gap-4 text-xs font-medium mt-1">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+                <span className="text-slate-300">Actioned ({teamStats?.total_actioned || 0})</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                <span className="text-slate-300">Pending ({teamStats?.total_pending || 0})</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Metrics 6-Grid Column (8 cols) */}
+          <div className="lg:col-span-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            
+            {/* 1. Total e-mails received */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                <span>1. Total Received</span>
+                <Mail className="w-4 h-4 text-sky-400" />
+              </div>
+              <div className="text-2xl font-extrabold text-white mt-2">
+                {teamStats?.total_received || 0}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                Total delivered emails
+              </div>
+            </div>
+
+            {/* 2. Total e-mails actioned */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                <span>2. Total Actioned</span>
+                <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="text-2xl font-extrabold text-emerald-400 mt-2 flex items-baseline gap-2">
+                <span>{teamStats?.total_actioned || 0}</span>
+                <span className="text-xs font-semibold text-emerald-500/90">
+                  ({teamStats?.actioned_percent || 0}%)
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                Responses logged
+              </div>
+            </div>
+
+            {/* 3. Total e-mails pending */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                <span>3. Total Pending</span>
+                <Clock className="w-4 h-4 text-amber-400" />
+              </div>
+              <div className="text-2xl font-extrabold text-amber-400 mt-2 flex items-baseline gap-2">
+                <span>{teamStats?.total_pending || 0}</span>
+                <span className="text-xs font-semibold text-amber-500/90">
+                  ({teamStats?.pending_percent || 0}%)
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                Awaiting response
+              </div>
+            </div>
+
+            {/* 4. Avg TAT – On Actioned e-mails */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                <span>4. Avg Actioned TAT</span>
+                <Timer className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="text-xl font-bold text-emerald-300 mt-2">
+                {teamStats?.avg_tat_actioned_formatted || 'N/A'}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                Avg TAT on actioned emails
+              </div>
+            </div>
+
+            {/* 5. Avg TAT – On Pending e-mails */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                <span>5. Avg Pending TAT</span>
+                <Clock className="w-4 h-4 text-amber-400" />
+              </div>
+              <div className="text-xl font-bold text-amber-300 mt-2">
+                {teamStats?.avg_tat_pending_formatted || 'N/A'}
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1">
+                Avg TAT on pending emails
+              </div>
+            </div>
+
+            {/* 6. TAT SLA Target Benchmark (48 Hours) */}
+            <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800/80">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold uppercase">
+                <span>6. TAT Target</span>
+                <ShieldCheck className="w-4 h-4 text-sky-400" />
+              </div>
+              <div className="text-xl font-bold text-sky-300 mt-2">
+                48 Hours Target
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1 flex items-center justify-between">
+                <span>SLA Rate:</span>
+                <span className="font-semibold text-emerald-400">{teamStats?.sla_compliance_rate || 100}%</span>
+              </div>
+            </div>
+
+          </div>
+
         </div>
       </div>
 

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { X, ShieldCheck, Key, Globe, CheckCircle2, AlertCircle, ExternalLink, Zap } from 'lucide-react';
+import { X, ShieldCheck, Key, Globe, CheckCircle2, AlertCircle, ExternalLink, Zap, Copy, Check } from 'lucide-react';
 
 export default function SettingsModal({ isOpen, onClose }) {
+  const defaultCallback = 'https://mailtracking-backend.onrender.com/api/auth/google/callback';
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [redirectUri, setRedirectUri] = useState('http://localhost:5000/api/auth/google/callback');
+  const [redirectUri, setRedirectUri] = useState(defaultCallback);
+  const [copied, setCopied] = useState(false);
   const [mode, setMode] = useState('simulation');
   const [status, setStatus] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -21,7 +23,7 @@ export default function SettingsModal({ isOpen, onClose }) {
       const res = await fetch('/api/settings');
       const data = await res.json();
       setClientId(data.clientId || '');
-      setRedirectUri(data.redirectUri || 'http://localhost:5000/api/auth/google/callback');
+      setRedirectUri(data.redirectUri || defaultCallback);
       setMode(data.mode || 'simulation');
       setStatus(data);
     } catch (err) {
@@ -52,7 +54,10 @@ export default function SettingsModal({ isOpen, onClose }) {
   const handleConnectGoogle = async () => {
     try {
       await handleSave();
-      const res = await fetch(`/api/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}`);
+      const currentFrontend = window.location.origin;
+      const res = await fetch(
+        `/api/auth/google/url?redirectUri=${encodeURIComponent(redirectUri)}&frontendUrl=${encodeURIComponent(currentFrontend)}`
+      );
       const data = await res.json();
       if (data.url) {
         window.location.href = data.url;
@@ -197,13 +202,34 @@ export default function SettingsModal({ isOpen, onClose }) {
             </div>
 
             <div>
-              <label className="block text-xs text-slate-400 mb-1">Authorized Redirect URI</label>
-              <input
-                type="text"
-                value={redirectUri}
-                onChange={(e) => setRedirectUri(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-3.5 py-2.5 text-xs text-slate-300 font-mono focus:outline-none focus:border-sky-500"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs text-slate-400">Authorized Redirect URI</label>
+                <span className="text-[11px] text-sky-400">Must match Google Cloud Console</span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={redirectUri}
+                  onChange={(e) => setRedirectUri(e.target.value)}
+                  className="flex-1 bg-slate-900 border border-slate-700/70 rounded-xl px-3.5 py-2.5 text-xs text-slate-300 font-mono focus:outline-none focus:border-sky-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(redirectUri);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  }}
+                  className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs flex items-center gap-1.5 border border-slate-700 transition-colors"
+                  title="Copy Redirect URI"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+              <p className="text-[11px] text-amber-400/90 mt-1.5 leading-relaxed bg-amber-500/10 p-2.5 rounded-lg border border-amber-500/20">
+                💡 <strong>To fix Error 400 redirect_uri_mismatch:</strong> Copy the exact URI above and add it under <strong>Authorized redirect URIs</strong> in your Google Cloud Console for this Client ID.
+              </p>
             </div>
           </div>
 
@@ -211,7 +237,7 @@ export default function SettingsModal({ isOpen, onClose }) {
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/60 flex items-center justify-between">
-          <span className="text-xs text-slate-500">Backend Port: 5000</span>
+          <span className="text-xs text-slate-500">Active Origin: {typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'}</span>
           <div className="flex items-center gap-3">
             <button onClick={onClose} className="px-4 py-2 text-xs text-slate-400 hover:text-white">
               Close

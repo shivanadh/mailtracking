@@ -22,7 +22,7 @@ async function getSettings() {
   return {
     clientId: result.clientId || '',
     clientSecret: result.clientSecret || '',
-    redirectUri: result.redirectUri || process.env.REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback',
+    redirectUri: result.redirectUri || process.env.REDIRECT_URI || 'https://mailtracking-backend.onrender.com/api/auth/google/callback',
     refreshToken: result.refreshToken || '',
     userEmail: result.userEmail || '',
     mode: result.mode || 'simulation' // 'oauth' or 'simulation'
@@ -60,7 +60,7 @@ async function getOAuth2Client(overrideRedirectUri) {
   return oauth2Client;
 }
 
-async function generateAuthUrl(overrideRedirectUri) {
+async function generateAuthUrl(overrideRedirectUri, state) {
   const oauth2Client = await getOAuth2Client(overrideRedirectUri);
   if (!oauth2Client) {
     throw new Error('Google Client ID and Client Secret must be configured first.');
@@ -72,11 +72,17 @@ async function generateAuthUrl(overrideRedirectUri) {
     'https://www.googleapis.com/auth/userinfo.email'
   ];
 
-  return oauth2Client.generateAuthUrl({
+  const authOptions = {
     access_type: 'offline',
     scope: scopes,
     prompt: 'consent'
-  });
+  };
+
+  if (state) {
+    authOptions.state = typeof state === 'object' ? JSON.stringify(state) : state;
+  }
+
+  return oauth2Client.generateAuthUrl(authOptions);
 }
 
 async function handleAuthCallback(code, overrideRedirectUri) {

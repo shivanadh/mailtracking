@@ -205,6 +205,71 @@ app.delete('/api/campaigns/:id', async (req, res) => {
 });
 
 // -------------------------------------------------------------
+// TEAM OVERALL STATS & 48H SLA METRICS ENDPOINT
+// -------------------------------------------------------------
+app.get('/api/stats/team', async (req, res) => {
+  try {
+    const db = await getDb();
+    const recipients = await db.all('SELECT * FROM recipients');
+    const totalReceived = recipients.length;
+
+    const actionedRecipients = recipients.filter(r => r.status === 'REPLIED');
+    const pendingRecipients = recipients.filter(r => r.status !== 'REPLIED');
+
+    const totalActioned = actionedRecipients.length;
+    const totalPending = pendingRecipients.length;
+
+    const actionedPercent = totalReceived ? Math.round((totalActioned / totalReceived) * 100) : 0;
+    const pendingPercent = totalReceived ? Math.round((totalPending / totalReceived) * 100) : 0;
+
+    // Actioned TAT (tat_reply_seconds)
+    const actionedTats = actionedRecipients
+      .filter(r => r.tat_reply_seconds !== null && r.tat_reply_seconds !== undefined)
+      .map(r => r.tat_reply_seconds);
+    const avgTatActionedSec = actionedTats.length
+      ? Math.round(actionedTats.reduce((a, b) => a + b, 0) / actionedTats.length)
+      : null;
+
+    // Pending TAT (Elapsed time from sent_at to now)
+    const nowMs = Date.now();
+    const pendingTats = pendingRecipients.map(r => {
+      const sentMs = new Date(r.sent_at).getTime();
+      return Math.max(0, Math.floor((nowMs - sentMs) / 1000));
+    });
+    const avgTatPendingSec = pendingTats.length
+      ? Math.round(pendingTats.reduce((a, b) => a + b, 0) / pendingTats.length)
+      : null;
+
+    // 48-Hour SLA (48 * 3600 = 172800 seconds)
+    const SLA_LIMIT_SECONDS = 48 * 3600;
+    const actionedWithinSla = actionedTats.filter(t => t <= SLA_LIMIT_SECONDS).length;
+    const pendingOverSla = pendingTats.filter(t => t > SLA_LIMIT_SECONDS).length;
+
+    const slaComplianceRate = totalActioned
+      ? Math.round((actionedWithinSla / totalActioned) * 100)
+      : (totalReceived ? 100 : 0);
+
+    res.json({
+      total_received: totalReceived,
+      total_actioned: totalActioned,
+      total_pending: totalPending,
+      actioned_percent: actionedPercent,
+      pending_percent: pendingPercent,
+      avg_tat_actioned_seconds: avgTatActionedSec,
+      avg_tat_actioned_formatted: formatTAT(avgTatActionedSec),
+      avg_tat_pending_seconds: avgTatPendingSec,
+      avg_tat_pending_formatted: formatTAT(avgTatPendingSec),
+      sla_target_hours: 48,
+      actioned_within_sla_count: actionedWithinSla,
+      pending_over_sla_count: pendingOverSla,
+      sla_compliance_rate: slaComplianceRate
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
 // RECIPIENT TIMELINE LOGS & DEMO SIMULATIONS
 // -------------------------------------------------------------
 app.get('/api/recipients/:id/logs', async (req, res) => {
@@ -331,11 +396,11 @@ app.post('/api/settings', async (req, res) => {
 
 app.get('/api/auth/google/url', async (req, res) => {
   try {
-    const protocol = req.protocol;
-    const host = req.get('host');
-    const defaultUri = process.env.REDIRECT_URI || `${protocol}://${host}/api/auth/google/callback`;
+    const settings = await getSettings();
+    const defaultUri = process.env.REDIRECT_URI || settings.redirectUri || 'https://mailtracking-backend.onrender.com/api/auth/google/callback';
     const redirectUri = req.query.redirectUri || defaultUri;
-    const url = await generateAuthUrl(redirectUri);
+    const frontendUrl = req.query.frontendUrl || req.get('origin') || req.get('referer') || process.env.FRONTEND_URL || 'https://mailtracking-23f28kgbz-enterpriseflow.vercel.app';
+    const url = await generateAuthUrl(redirectUri, { frontendUrl });
     res.json({ url, redirectUriUsed: redirectUri });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -344,15 +409,41 @@ app.get('/api/auth/google/url', async (req, res) => {
 
 app.get('/api/auth/google/callback', async (req, res) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
     if (!code) {
       return res.status(400).send('Missing authorization code');
     }
-    const protocol = req.protocol;
-    const host = req.get('host');
-    const currentCallbackUrl = process.env.REDIRECT_URI || `${protocol}://${host}/api/auth/google/callback`;
-    const userInfo = await handleAuthCallback(code, currentCallbackUrl);
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const settings = await getSettings();
+    const callbackRedirectUri = process.env.REDIRECT_URI || settings.redirectUri || 'https://mailtracking-backend.onrender.com/api/auth/google/callback';
+    const userInfo = await handleAuthCallback(code, callbackRedirectUri);
+
+    let frontendUrl = process.env.FRONTEND_URL;
+    if (!frontendUrl && state) {
+      try {
+        const parsedState = JSON.parse(state);
+        if (parsedState && parsedState.frontendUrl) {
+          frontendUrl = parsedState.frontendUrl;
+        }
+      } catch (e) {
+        if (state.startsWith('http://') || state.startsWith('https://')) {
+          frontendUrl = state;
+        }
+      }
+    }
+    if (!frontendUrl) {
+      const origin = req.get('origin') || req.get('referer');
+      if (origin) {
+        try {
+          const parsed = new URL(origin);
+          frontendUrl = `${parsed.protocol}//${parsed.host}`;
+        } catch (e) {
+          frontendUrl = origin;
+        }
+      } else {
+        frontendUrl = 'https://mailtracking-23f28kgbz-enterpriseflow.vercel.app';
+      }
+    }
+
     res.send(`
       <html>
         <body style="font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0;">
