@@ -399,7 +399,7 @@ app.get('/api/auth/google/url', async (req, res) => {
     const settings = await getSettings();
     const defaultUri = process.env.REDIRECT_URI || settings.redirectUri || 'https://mailtracking-backend.onrender.com/api/auth/google/callback';
     const redirectUri = req.query.redirectUri || defaultUri;
-    const frontendUrl = req.query.frontendUrl || req.get('origin') || req.get('referer') || process.env.FRONTEND_URL || 'https://mailtracking-23f28kgbz-enterpriseflow.vercel.app';
+    const frontendUrl = req.query.frontendUrl || req.get('origin') || req.get('referer') || process.env.FRONTEND_URL || 'https://mailtracking-tau.vercel.app';
     const url = await generateAuthUrl(redirectUri, { frontendUrl });
     res.json({ url, redirectUriUsed: redirectUri });
   } catch (err) {
@@ -440,7 +440,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
           frontendUrl = origin;
         }
       } else {
-        frontendUrl = 'https://mailtracking-23f28kgbz-enterpriseflow.vercel.app';
+        frontendUrl = 'https://mailtracking-tau.vercel.app';
       }
     }
 
