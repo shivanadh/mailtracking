@@ -2,6 +2,7 @@ const { google } = require('googleapis');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const { getDb } = require('./db');
 const { getSettings, getOAuth2Client } = require('./googleAuth');
+const { evaluateAutoAssignment, applyAssignment } = require('./assignmentEngine');
 
 async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
   const db = await getDb();
@@ -41,8 +42,9 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
   const createdRecipients = [];
 
   for (const rec of recipients) {
-    const email = (rec.email || rec).trim();
-    const name = rec.name ? rec.name.trim() : email.split('@')[0];
+    const rawRec = typeof rec === 'object' ? rec : { email: rec };
+    const email = (rawRec.email || '').trim();
+    const name = rawRec.name ? rawRec.name.trim() : email.split('@')[0];
 
     // Insert Recipient record first to get recipientId
     const recResult = await db.run(
@@ -51,6 +53,22 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
       [campaignId, email, name, now]
     );
     const recipientId = recResult.lastID;
+
+    // Auto-assign recipient ownership via assignmentEngine rules
+    try {
+      const assignmentDecision = await evaluateAutoAssignment({
+        email,
+        name,
+        subject,
+        body,
+        account_code: rawRec.account_code || rawRec.customer_code,
+        to_list: rawRec.to_list,
+        cc_list: rawRec.cc_list
+      });
+      await applyAssignment(recipientId, assignmentDecision, 'auto-rule', 'Initial Campaign Dispatch Auto-Assignment');
+    } catch (assignErr) {
+      console.error(`Error auto-assigning recipient ${recipientId}:`, assignErr.message);
+    }
 
     // Build personalized body with tracking pixel
     let personalizedBody = body.replace(/\{\{\s*name\s*\}\}/gi, name).replace(/\{\{\s*email\s*\}\}/gi, email);

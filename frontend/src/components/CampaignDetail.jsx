@@ -12,6 +12,7 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
   const [statusFilter, setStatusFilter] = useState('ALL');
   
   // Modals state
+  const [teamMembers, setTeamMembers] = useState([]);
   const [timelineRecipient, setTimelineRecipient] = useState(null); // recipient object or null
   const [timelineLogs, setTimelineLogs] = useState([]);
   const [loadingTimeline, setLoadingTimeline] = useState(false);
@@ -39,10 +40,31 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
 
   useEffect(() => {
     fetchCampaignDetail();
+    fetch('/api/team-members')
+      .then(r => r.json())
+      .then(data => setTeamMembers(data))
+      .catch(err => console.error('Error fetching team members:', err));
     // Auto polling every 15s for live updates
     const interval = setInterval(() => fetchCampaignDetail(), 15000);
     return () => clearInterval(interval);
   }, [campaignId]);
+
+  const handleAssigneeChange = async (recipientId, newAssigneeId) => {
+    try {
+      const res = await fetch(`/api/recipients/${recipientId}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assignee_id: newAssigneeId ? parseInt(newAssigneeId, 10) : null,
+          actor: 'Manager',
+          note: 'Reassigned from Campaign Detail'
+        })
+      });
+      if (res.ok) fetchCampaignDetail();
+    } catch (err) {
+      console.error('Failed assigning recipient:', err);
+    }
+  };
 
   const handleSyncReplies = async () => {
     setRefreshing(true);
@@ -289,6 +311,7 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
             <thead className="bg-slate-950/60 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800/80">
               <tr>
                 <th className="px-5 py-3.5 font-semibold">Recipient</th>
+                <th className="px-4 py-3.5 font-semibold">Assignee & Rule</th>
                 <th className="px-4 py-3.5 font-semibold">Status</th>
                 <th className="px-4 py-3.5 font-semibold">First Open & TAT</th>
                 <th className="px-4 py-3.5 font-semibold">First Reply & TAT</th>
@@ -311,6 +334,29 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                     <td className="px-5 py-4">
                       <div className="font-medium text-white">{rec.name || 'Recipient'}</div>
                       <div className="text-xs text-slate-400 font-mono">{rec.email}</div>
+                    </td>
+
+                    {/* Assignee & Rule */}
+                    <td className="px-4 py-4">
+                      <div className="flex flex-col gap-1">
+                        <select
+                          value={rec.assignee_id || ''}
+                          onChange={(e) => handleAssigneeChange(rec.id, e.target.value)}
+                          className="bg-slate-900 border border-slate-800 hover:border-slate-700 text-xs text-white rounded-lg px-2 py-1 outline-none cursor-pointer"
+                        >
+                          <option value="">Unassigned Queue</option>
+                          {teamMembers.map(m => (
+                            <option key={m.id} value={m.id}>{m.name} ({m.team})</option>
+                          ))}
+                        </select>
+                        <span className="text-[10px] text-slate-400 font-medium">
+                          {rec.assignment_rule === 'account_code' && <span className="text-sky-400 font-semibold">Auto: Customer Code</span>}
+                          {rec.assignment_rule === 'direct_recipient' && <span className="text-emerald-400 font-semibold">Auto: Direct To/Cc</span>}
+                          {rec.assignment_rule === 'signature_match' && <span className="text-purple-400 font-semibold">Auto: Signature</span>}
+                          {rec.assignment_rule === 'manual' && <span className="text-indigo-400 font-semibold">Manual Assignment</span>}
+                          {(!rec.assignment_rule || rec.assignment_rule === 'default_queue') && <span className="text-slate-500">Default Queue</span>}
+                        </span>
+                      </div>
                     </td>
 
                     {/* Status Badge */}

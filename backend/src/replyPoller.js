@@ -59,9 +59,11 @@ async function syncReplies() {
                    first_replied_at = COALESCE(first_replied_at, ?),
                    reply_count = reply_count + 1,
                    tat_reply_seconds = COALESCE(tat_reply_seconds, ?),
-                   reply_snippet = ?
+                   reply_snippet = ?,
+                   actioned_at = COALESCE(actioned_at, ?),
+                   actioned_by = COALESCE(actioned_by, assignee_id)
                WHERE id = ?`,
-              [replyTime, tatReplySeconds, snippet, recipient.id]
+              [replyTime, tatReplySeconds, snippet, replyTime, recipient.id]
             );
 
             await db.run(
@@ -108,9 +110,11 @@ async function simulateReply(recipientId, customSnippet, customMinutesDelay) {
          first_replied_at = COALESCE(first_replied_at, ?),
          reply_count = reply_count + 1,
          tat_reply_seconds = COALESCE(tat_reply_seconds, ?),
-         reply_snippet = ?
+         reply_snippet = ?,
+         actioned_at = COALESCE(actioned_at, ?),
+         actioned_by = COALESCE(actioned_by, assignee_id)
      WHERE id = ?`,
-    [replyTime, tatReplySeconds, snippet, recipient.id]
+    [replyTime, tatReplySeconds, snippet, replyTime, recipient.id]
   );
 
   await db.run(
