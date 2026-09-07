@@ -270,6 +270,110 @@ app.get('/api/stats/team', async (req, res) => {
 });
 
 // -------------------------------------------------------------
+// RECIPIENT LOGS FOR ACTIONED VS PENDING DRAWER
+// -------------------------------------------------------------
+app.get('/api/stats/recipients', async (req, res) => {
+  try {
+    const { status, search, campaignId } = req.query;
+    const db = await getDb();
+
+    let query = `
+      SELECT 
+        r.*,
+        c.subject AS campaign_subject,
+        c.title AS campaign_title
+      FROM recipients r
+      JOIN campaigns c ON r.campaign_id = c.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    if (status === 'actioned') {
+      query += ` AND r.status = 'REPLIED'`;
+    } else if (status === 'pending') {
+      query += ` AND r.status != 'REPLIED'`;
+    }
+
+    if (campaignId) {
+      query += ` AND r.campaign_id = ?`;
+      params.push(parseInt(campaignId, 10));
+    }
+
+    if (search && search.trim()) {
+      const searchTerm = `%${search.trim()}%`;
+      query += ` AND (r.name LIKE ? OR r.email LIKE ? OR c.subject LIKE ? OR c.title LIKE ?)`;
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    query += ` ORDER BY r.id DESC`;
+
+    const recipients = await db.all(query, params);
+
+    const allRecipients = await db.all('SELECT status FROM recipients');
+    const totalReceived = allRecipients.length;
+    const totalActioned = allRecipients.filter(r => r.status === 'REPLIED').length;
+    const totalPending = allRecipients.filter(r => r.status !== 'REPLIED').length;
+
+    const SLA_LIMIT_SECONDS = 48 * 3600; // 48 Hours Target
+    const SLA_WARNING_SECONDS = 24 * 3600; // 24 Hours
+
+    const nowMs = Date.now();
+
+    const formattedRecipients = recipients.map(r => {
+      const sentMs = new Date(r.sent_at).getTime();
+      const waitingTatSec = Math.max(0, Math.floor((nowMs - sentMs) / 1000));
+      
+      let slaStatus = 'ON_TRACK';
+      let slaLabel = 'On Track';
+
+      if (r.status === 'REPLIED') {
+        const tat = r.tat_reply_seconds ?? waitingTatSec;
+        if (tat > SLA_LIMIT_SECONDS) {
+          slaStatus = 'BREACHED';
+          slaLabel = 'Breached';
+        } else {
+          slaStatus = 'ON_TRACK';
+          slaLabel = 'On Track';
+        }
+      } else {
+        // Pending
+        if (waitingTatSec > SLA_LIMIT_SECONDS) {
+          slaStatus = 'BREACHED';
+          slaLabel = 'Breached (>48h)';
+        } else if (waitingTatSec > SLA_WARNING_SECONDS) {
+          slaStatus = 'AT_RISK';
+          slaLabel = 'At Risk (24-48h)';
+        } else {
+          slaStatus = 'ON_TRACK';
+          slaLabel = 'On Track (<24h)';
+        }
+      }
+
+      return {
+        ...r,
+        waiting_tat_seconds: waitingTatSec,
+        waiting_tat_formatted: formatTAT(waitingTatSec),
+        tat_open_formatted: formatTAT(r.tat_open_seconds),
+        tat_reply_formatted: formatTAT(r.tat_reply_seconds),
+        sla_status: slaStatus,
+        sla_label: slaLabel
+      };
+    });
+
+    res.json({
+      total_received: totalReceived,
+      total_actioned: totalActioned,
+      total_pending: totalPending,
+      filtered_count: formattedRecipients.length,
+      recipients: formattedRecipients
+    });
+  } catch (err) {
+    console.error('Error fetching recipient stats:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
 // RECIPIENT TIMELINE LOGS & DEMO SIMULATIONS
 // -------------------------------------------------------------
 app.get('/api/recipients/:id/logs', async (req, res) => {

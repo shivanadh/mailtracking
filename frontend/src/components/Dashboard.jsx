@@ -5,6 +5,7 @@ import {
   PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
+import RecipientLogsDrawer from './RecipientLogsDrawer';
 
 export default function Dashboard({ 
   campaigns, 
@@ -16,6 +17,15 @@ export default function Dashboard({
 }) {
   const [syncing, setSyncing] = useState(false);
   const [teamStats, setTeamStats] = useState(null);
+  
+  // Drawer modal state for Actioned vs Pending recipient logs
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [selectedSegment, setSelectedSegment] = useState('actioned'); // 'actioned' | 'pending'
+
+  const handleOpenDrawer = (segment) => {
+    setSelectedSegment(segment);
+    setIsDrawerOpen(true);
+  };
 
   useEffect(() => {
     fetchTeamStats();
@@ -165,21 +175,36 @@ export default function Dashboard({
                       paddingAngle={5}
                       dataKey="value"
                       stroke="none"
+                      onClick={(data) => {
+                        if (data && data.name) {
+                          const seg = data.name === 'Actioned' ? 'actioned' : 'pending';
+                          handleOpenDrawer(seg);
+                        }
+                      }}
                     >
                       {donutData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
+                        <Cell 
+                          key={`cell-${index}`} 
+                          fill={entry.color} 
+                          className="cursor-pointer hover:opacity-80 transition-opacity duration-150"
+                        />
                       ))}
                     </Pie>
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '0.75rem', color: '#fff', fontSize: '12px' }}
+                      formatter={(value, name) => [`${value} recipients (Click to view logs)`, name]}
                     />
                   </PieChart>
                 </ResponsiveContainer>
                 
                 {/* Center text inside Donut */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                  <span className="text-2xl font-extrabold text-white">{teamStats.actioned_percent}%</span>
-                  <span className="text-[10px] text-slate-400 uppercase font-semibold">Actioned</span>
+                <div 
+                  onClick={() => handleOpenDrawer('actioned')}
+                  className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer group"
+                  title="Click to view Actioned recipient logs"
+                >
+                  <span className="text-2xl font-extrabold text-white group-hover:text-emerald-400 transition-colors">{teamStats.actioned_percent}%</span>
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold group-hover:text-emerald-400/90 transition-colors">Actioned</span>
                 </div>
               </div>
             ) : (
@@ -188,16 +213,29 @@ export default function Dashboard({
               </div>
             )}
 
-            {/* Donut Legend */}
-            <div className="flex items-center gap-4 text-xs font-medium mt-1">
-              <div className="flex items-center gap-1.5">
+            {/* Helper Text */}
+            <div className="text-[11px] text-sky-400/90 font-medium my-1 flex items-center gap-1">
+              <span>💡 Click a segment to view recipient logs</span>
+            </div>
+
+            {/* Donut Legend (Interactive) */}
+            <div className="flex items-center gap-2 text-xs font-medium mt-1">
+              <button 
+                onClick={() => handleOpenDrawer('actioned')}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer text-slate-300 hover:text-emerald-400"
+                title="Click to view Actioned logs"
+              >
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                <span className="text-slate-300">Actioned ({teamStats?.total_actioned || 0})</span>
-              </div>
-              <div className="flex items-center gap-1.5">
+                <span>Actioned ({teamStats?.total_actioned || 0})</span>
+              </button>
+              <button 
+                onClick={() => handleOpenDrawer('pending')}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg hover:bg-slate-800/80 transition-colors cursor-pointer text-slate-300 hover:text-amber-400"
+                title="Click to view Pending Action logs"
+              >
                 <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-                <span className="text-slate-300">Pending ({teamStats?.total_pending || 0})</span>
-              </div>
+                <span>Pending ({teamStats?.total_pending || 0})</span>
+              </button>
             </div>
           </div>
 
@@ -502,6 +540,15 @@ export default function Dashboard({
           </table>
         </div>
       </div>
+
+      {/* Recipient Logs Side Drawer Modal */}
+      <RecipientLogsDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        segment={selectedSegment}
+        teamStats={teamStats}
+        onSelectCampaign={onSelectCampaign}
+      />
 
     </div>
   );
