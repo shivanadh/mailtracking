@@ -67,8 +67,8 @@ export default function Dashboard({
 
   // Donut chart dataset for Received vs Actioned vs Pending
   const donutData = teamStats ? [
-    { name: 'Actioned', value: teamStats.total_actioned, color: '#10b981' },
-    { name: 'Pending', value: teamStats.total_pending, color: '#f59e0b' }
+    { name: 'Actioned', value: teamStats.total_actioned, color: '#10b981', key: 'actioned' },
+    { name: 'Pending', value: teamStats.total_pending, color: '#f59e0b', key: 'pending' }
   ] : [];
 
   // Chart data formatting
@@ -176,8 +176,8 @@ export default function Dashboard({
                       dataKey="value"
                       stroke="none"
                       onClick={(data) => {
-                        if (data && data.name) {
-                          const seg = data.name === 'Actioned' ? 'actioned' : 'pending';
+                        if (data && (data.key || data.name)) {
+                          const seg = data.key || (data.name === 'Actioned' ? 'actioned' : 'pending');
                           handleOpenDrawer(seg);
                         }
                       }}
@@ -186,7 +186,11 @@ export default function Dashboard({
                         <Cell 
                           key={`cell-${index}`} 
                           fill={entry.color} 
-                          className="cursor-pointer hover:opacity-80 transition-opacity duration-150"
+                          onClick={(e) => {
+                            if (e && e.stopPropagation) e.stopPropagation();
+                            handleOpenDrawer(entry.key);
+                          }}
+                          className="cursor-pointer hover:opacity-80 transition-opacity duration-150 outline-none"
                         />
                       ))}
                     </Pie>
@@ -197,14 +201,12 @@ export default function Dashboard({
                   </PieChart>
                 </ResponsiveContainer>
                 
-                {/* Center text inside Donut */}
+                {/* Center text inside Donut (pointer-events-none so it doesn't block segment clicks) */}
                 <div 
-                  onClick={() => handleOpenDrawer('actioned')}
-                  className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer group"
-                  title="Click to view Actioned recipient logs"
+                  className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
                 >
-                  <span className="text-2xl font-extrabold text-white group-hover:text-emerald-400 transition-colors">{teamStats.actioned_percent}%</span>
-                  <span className="text-[10px] text-slate-400 uppercase font-semibold group-hover:text-emerald-400/90 transition-colors">Actioned</span>
+                  <span className="text-2xl font-extrabold text-white">{teamStats.actioned_percent}%</span>
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold">Actioned</span>
                 </div>
               </div>
             ) : (
