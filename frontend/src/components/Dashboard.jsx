@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 import RecipientLogsDrawer from './RecipientLogsDrawer';
-import TeamPerformanceSection from './TeamPerformanceSection';
 
 export default function Dashboard({ 
   campaigns, 
@@ -340,12 +339,6 @@ export default function Dashboard({
 
         </div>
       </div>
-
-      {/* Team Performance Section (Internal Assignees, Workload & TAT Console) */}
-      <TeamPerformanceSection 
-        onSelectCampaign={onSelectCampaign}
-        onRefresh={onRefresh}
-      />
 
       {/* Overview Metric Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
