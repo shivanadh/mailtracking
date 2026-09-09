@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Mail, Eye, MessageSquare, Clock, Zap, BarChart2, TrendingUp, 
   Settings, RefreshCw, ChevronRight, Trash2, Shield, Users,
-  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer
+  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer, ListFilter
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 import RecipientLogsDrawer from './RecipientLogsDrawer';
+import TeamActionLogsDrawer from './TeamActionLogsDrawer';
 
 export default function Dashboard({ 
   campaigns, 
@@ -22,10 +23,20 @@ export default function Dashboard({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSegment, setSelectedSegment] = useState('actioned'); // 'actioned' | 'pending'
 
+  // Dedicated Team Action Logs drill-down modal state
+  const [isTeamActionLogsOpen, setIsTeamActionLogsOpen] = useState(false);
+  const [teamActionLogsTab, setTeamActionLogsTab] = useState('longest_pending'); // 'longest_pending' | 'most_actioned'
+
   const handleOpenDrawer = (segment) => {
     setSelectedSegment(segment);
     setIsDrawerOpen(true);
   };
+
+  const handleOpenTeamActionLogs = (tab = 'longest_pending') => {
+    setTeamActionLogsTab(tab);
+    setIsTeamActionLogsOpen(true);
+  };
+
 
   useEffect(() => {
     fetchTeamStats();
@@ -146,6 +157,15 @@ export default function Dashboard({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleOpenTeamActionLogs('longest_pending')}
+              className="flex items-center gap-2 px-3.5 py-1.5 bg-gradient-to-r from-sky-500/20 to-blue-600/20 hover:from-sky-500/30 hover:to-blue-600/30 text-sky-300 font-semibold text-xs rounded-xl border border-sky-500/30 shadow-md transition-all cursor-pointer"
+              title="Open detailed Team Action Logs drill-down drawer"
+            >
+              <ListFilter className="w-4 h-4 text-sky-400" />
+              <span>Team Action Logs</span>
+            </button>
+
             <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               SLA Benchmark: 48 Hours
@@ -549,6 +569,14 @@ export default function Dashboard({
         onClose={() => setIsDrawerOpen(false)}
         segment={selectedSegment}
         teamStats={teamStats}
+        onSelectCampaign={onSelectCampaign}
+      />
+
+      {/* Dedicated Team Action Logs Drill-Down Drawer Modal */}
+      <TeamActionLogsDrawer
+        isOpen={isTeamActionLogsOpen}
+        onClose={() => setIsTeamActionLogsOpen(false)}
+        initialTab={teamActionLogsTab}
         onSelectCampaign={onSelectCampaign}
       />
 

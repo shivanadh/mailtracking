@@ -374,6 +374,173 @@ app.get('/api/stats/recipients', async (req, res) => {
 });
 
 // -------------------------------------------------------------
+// FOCUSED DRILL-DOWN: TEAM ACTION LOGS ENDPOINT
+// -------------------------------------------------------------
+app.get('/api/stats/team-action-logs', async (req, res) => {
+  try {
+    const { tab = 'longest_pending', search, dateRange = 'all_time' } = req.query;
+    const db = await getDb();
+
+    let query = `
+      SELECT 
+        r.*,
+        c.subject AS campaign_subject,
+        c.title AS campaign_title
+      FROM recipients r
+      JOIN campaigns c ON r.campaign_id = c.id
+      WHERE 1=1
+    `;
+    const params = [];
+
+    // Date range filtering based on sent_at
+    const now = new Date();
+    if (dateRange === 'today') {
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      query += ` AND r.sent_at >= ?`;
+      params.push(startOfDay);
+    } else if (dateRange === 'last_7_days') {
+      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      query += ` AND r.sent_at >= ?`;
+      params.push(sevenDaysAgo);
+    } else if (dateRange === 'last_30_days') {
+      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      query += ` AND r.sent_at >= ?`;
+      params.push(thirtyDaysAgo);
+    }
+
+    // Search filter
+    if (search && search.trim()) {
+      const searchTerm = `%${search.trim()}%`;
+      query += ` AND (r.name LIKE ? OR r.email LIKE ? OR c.subject LIKE ? OR c.title LIKE ?)`;
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+    }
+
+    const allMatching = await db.all(query, params);
+
+    // Reconcile total actioned vs total pending for overall context
+    const allDbRecipients = await db.all('SELECT status FROM recipients');
+    const totalActionedCount = allDbRecipients.filter(r => r.status === 'REPLIED').length;
+    const totalPendingCount = allDbRecipients.filter(r => r.status !== 'REPLIED').length;
+
+    const SLA_LIMIT_SECONDS = 48 * 3600; // 48 Hours
+    const SLA_WARNING_SECONDS = 24 * 3600; // 24 Hours
+    const nowMs = Date.now();
+
+    if (tab === 'most_actioned') {
+      // Filter for REPLIED recipients
+      const actionedItems = allMatching.filter(r => r.status === 'REPLIED');
+
+      // Default sort: newest action first (first_replied_at DESC)
+      actionedItems.sort((a, b) => {
+        const timeA = new Date(a.first_replied_at || a.sent_at).getTime();
+        const timeB = new Date(b.first_replied_at || b.sent_at).getTime();
+        return timeB - timeA;
+      });
+
+      const formattedLogs = actionedItems.map(r => ({
+        ...r,
+        tat_open_formatted: formatTAT(r.tat_open_seconds),
+        tat_reply_formatted: formatTAT(r.tat_reply_seconds)
+      }));
+
+      // Compute ranked summary: Top actioned recipient contacts
+      const recipientMap = {};
+      actionedItems.forEach(r => {
+        const key = r.email.toLowerCase();
+        if (!recipientMap[key]) {
+          recipientMap[key] = {
+            email: r.email,
+            name: r.name || r.email.split('@')[0],
+            actioned_count: 0,
+            tat_sum: 0,
+            tat_count: 0
+          };
+        }
+        recipientMap[key].actioned_count += 1;
+        if (r.tat_reply_seconds !== null && r.tat_reply_seconds !== undefined) {
+          recipientMap[key].tat_sum += r.tat_reply_seconds;
+          recipientMap[key].tat_count += 1;
+        }
+      });
+
+      const rankedSummary = Object.values(recipientMap).map(item => {
+        const avgSec = item.tat_count ? Math.round(item.tat_sum / item.tat_count) : null;
+        return {
+          email: item.email,
+          name: item.name,
+          actioned_count: item.actioned_count,
+          avg_reply_tat_seconds: avgSec,
+          avg_reply_tat_formatted: formatTAT(avgSec)
+        };
+      });
+
+      // Sort summary by actioned count DESC, then avg tat ASC
+      rankedSummary.sort((a, b) => {
+        if (b.actioned_count !== a.actioned_count) {
+          return b.actioned_count - a.actioned_count;
+        }
+        if (a.avg_reply_tat_seconds === null) return 1;
+        if (b.avg_reply_tat_seconds === null) return -1;
+        return a.avg_reply_tat_seconds - b.avg_reply_tat_seconds;
+      });
+
+      return res.json({
+        tab: 'most_actioned',
+        total_count: formattedLogs.length,
+        total_actioned: totalActionedCount,
+        total_pending: totalPendingCount,
+        ranked_summary: rankedSummary,
+        logs: formattedLogs
+      });
+
+    } else {
+      // Default: longest_pending tab (status != 'REPLIED')
+      const pendingItems = allMatching.filter(r => r.status !== 'REPLIED');
+
+      const formattedLogs = pendingItems.map(r => {
+        const sentMs = new Date(r.sent_at).getTime();
+        const waitingTatSec = Math.max(0, Math.floor((nowMs - sentMs) / 1000));
+
+        let slaStatus = 'ON_TRACK';
+        let slaLabel = 'On Track (<24h)';
+
+        if (waitingTatSec > SLA_LIMIT_SECONDS) {
+          slaStatus = 'BREACHED';
+          slaLabel = 'Breached (>48h)';
+        } else if (waitingTatSec > SLA_WARNING_SECONDS) {
+          slaStatus = 'AT_RISK';
+          slaLabel = 'At Risk (24-48h)';
+        }
+
+        return {
+          ...r,
+          waiting_tat_seconds: waitingTatSec,
+          waiting_tat_formatted: formatTAT(waitingTatSec),
+          tat_open_formatted: formatTAT(r.tat_open_seconds),
+          sla_status: slaStatus,
+          sla_label: slaLabel
+        };
+      });
+
+      // Sort by longest pending TAT first (waiting_tat_seconds DESC)
+      formattedLogs.sort((a, b) => b.waiting_tat_seconds - a.waiting_tat_seconds);
+
+      return res.json({
+        tab: 'longest_pending',
+        total_count: formattedLogs.length,
+        total_actioned: totalActionedCount,
+        total_pending: totalPendingCount,
+        logs: formattedLogs
+      });
+    }
+  } catch (err) {
+    console.error('Error fetching team action logs:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// -------------------------------------------------------------
 // RECIPIENT TIMELINE LOGS & DEMO SIMULATIONS
 // -------------------------------------------------------------
 app.get('/api/recipients/:id/logs', async (req, res) => {
