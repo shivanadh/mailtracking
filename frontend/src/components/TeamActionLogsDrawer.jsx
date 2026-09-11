@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
   X, Search, Clock, CheckCircle2, AlertTriangle, ShieldCheck, 
-  RefreshCw, ExternalLink, Calendar, Timer, Info, Award
+  RefreshCw, ExternalLink, Calendar, Timer, Info, Award, MessageSquare 
 } from 'lucide-react';
+import ReplyDrawer from './ReplyDrawer';
 
 export default function TeamActionLogsDrawer({
   isOpen,
@@ -18,6 +19,7 @@ export default function TeamActionLogsDrawer({
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [activeReplyRecipientId, setActiveReplyRecipientId] = useState(null);
 
   // Sync activeTab when initialTab changes on drawer open
   useEffect(() => {
@@ -303,6 +305,7 @@ export default function TeamActionLogsDrawer({
                           <th className="py-3 px-4 font-semibold text-center">Open Count</th>
                         </>
                       )}
+                      <th className="py-3 px-4 font-semibold text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/60">
@@ -402,6 +405,11 @@ export default function TeamActionLogsDrawer({
                               <td className="py-3.5 px-4 text-center text-slate-400 text-[11px]">
                                 {log.first_opened_at ? formatDate(log.first_opened_at) : <span className="text-slate-600">Not opened</span>}
                               </td>
+
+                              {/* Action */}
+                              <td className="py-3.5 px-4 text-right">
+                                <span className="text-[11px] text-slate-500 group-hover:text-sky-400 font-medium">View &rarr;</span>
+                              </td>
                             </>
                           ) : (
                             <>
@@ -426,6 +434,21 @@ export default function TeamActionLogsDrawer({
                               {/* Open Count */}
                               <td className="py-3.5 px-4 text-center font-mono text-slate-300">
                                 {log.open_count || 0}
+                              </td>
+
+                              {/* Action: View Reply */}
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveReplyRecipientId(log.id);
+                                  }}
+                                  className="px-2.5 py-1 text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded-lg border border-emerald-500/30 transition-all flex items-center gap-1 cursor-pointer font-medium"
+                                  title="View Recipient Reply Message"
+                                >
+                                  <MessageSquare className="w-3 h-3 text-emerald-400" />
+                                  <span>View Reply</span>
+                                </button>
                               </td>
                             </>
                           )}
@@ -452,6 +475,13 @@ export default function TeamActionLogsDrawer({
 
         </div>
       </div>
+      {/* Reply Message Drawer */}
+      <ReplyDrawer
+        isOpen={Boolean(activeReplyRecipientId)}
+        onClose={() => setActiveReplyRecipientId(null)}
+        recipientId={activeReplyRecipientId}
+      />
+
     </div>
   );
 }

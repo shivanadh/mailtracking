@@ -4,7 +4,7 @@ const dotenv = require('dotenv');
 const { getDb } = require('./db');
 const { getSettings, saveSettings, generateAuthUrl, handleAuthCallback } = require('./googleAuth');
 const { sendCampaign } = require('./mailer');
-const { syncReplies, simulateReply } = require('./replyPoller');
+const { syncReplies, simulateReply, fetchRecipientReplyFromGmail } = require('./replyPoller');
 
 dotenv.config();
 
@@ -535,6 +535,137 @@ app.get('/api/stats/team-action-logs', async (req, res) => {
     }
   } catch (err) {
     console.error('Error fetching team action logs:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// -------------------------------------------------------------
+// RECIPIENT REPLY MESSAGE ENDPOINTS
+// -------------------------------------------------------------
+app.get('/api/recipients/:id/reply', async (req, res) => {
+  try {
+    const recipientId = parseInt(req.params.id, 10);
+    const db = await getDb();
+
+    const recipient = await db.get(`
+      SELECT r.*, c.subject AS campaign_subject, c.title AS campaign_title 
+      FROM recipients r 
+      JOIN campaigns c ON r.campaign_id = c.id 
+      WHERE r.id = ?
+    `, [recipientId]);
+
+    if (!recipient) {
+      return res.status(404).json({ error: 'Recipient not found' });
+    }
+
+    let replies = await db.all(
+      'SELECT * FROM recipient_replies WHERE recipient_id = ? ORDER BY id DESC',
+      [recipientId]
+    );
+
+    if (replies.length === 0 && recipient.latest_reply_body_text) {
+      replies = [{
+        id: 0,
+        recipient_id: recipient.id,
+        gmail_message_id: recipient.latest_reply_message_id || recipient.gmail_message_id,
+        gmail_thread_id: recipient.gmail_thread_id,
+        sender_name: recipient.latest_reply_sender_name || recipient.name || recipient.email.split('@')[0],
+        sender_email: recipient.latest_reply_sender_email || recipient.email,
+        received_at: recipient.first_replied_at || recipient.sent_at,
+        body_text: recipient.latest_reply_body_text || recipient.reply_snippet,
+        body_html: null,
+        created_at: recipient.first_replied_at || recipient.sent_at
+      }];
+    }
+
+    const latestReply = replies.length > 0 ? replies[0] : null;
+    const hasReply = recipient.status === 'REPLIED' || replies.length > 0;
+    const bodyAvailable = Boolean(latestReply && (latestReply.body_text || latestReply.body_html));
+
+    res.json({
+      recipient_id: recipient.id,
+      email: recipient.email,
+      name: recipient.name,
+      status: recipient.status,
+      sent_at: recipient.sent_at,
+      first_replied_at: recipient.first_replied_at,
+      tat_reply_seconds: recipient.tat_reply_seconds,
+      tat_reply_formatted: formatTAT(recipient.tat_reply_seconds),
+      campaign_id: recipient.campaign_id,
+      campaign_subject: recipient.campaign_subject,
+      campaign_title: recipient.campaign_title,
+      gmail_thread_id: recipient.gmail_thread_id,
+      has_reply: hasReply,
+      body_available: bodyAvailable,
+      latest_reply: latestReply ? {
+        id: latestReply.id,
+        gmail_message_id: latestReply.gmail_message_id,
+        gmail_thread_id: latestReply.gmail_thread_id,
+        sender_name: latestReply.sender_name || recipient.name || recipient.email.split('@')[0],
+        sender_email: latestReply.sender_email || recipient.email,
+        received_at: latestReply.received_at,
+        body_text: latestReply.body_text || recipient.reply_snippet || '',
+        body_html: latestReply.body_html || null
+      } : null,
+      reply_history_count: replies.length,
+      replies: replies.map(r => ({
+        id: r.id,
+        gmail_message_id: r.gmail_message_id,
+        sender_name: r.sender_name || recipient.name,
+        sender_email: r.sender_email || recipient.email,
+        received_at: r.received_at,
+        body_text: r.body_text
+      }))
+    });
+  } catch (err) {
+    console.error('Error fetching recipient reply:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/recipients/:id/fetch-reply', async (req, res) => {
+  try {
+    const recipientId = parseInt(req.params.id, 10);
+    const result = await fetchRecipientReplyFromGmail(recipientId);
+    const db = await getDb();
+    
+    const recipient = await db.get(`
+      SELECT r.*, c.subject AS campaign_subject, c.title AS campaign_title 
+      FROM recipients r 
+      JOIN campaigns c ON r.campaign_id = c.id 
+      WHERE r.id = ?
+    `, [recipientId]);
+
+    const latestReply = result.latestReply;
+    const bodyAvailable = Boolean(latestReply && latestReply.body_text);
+
+    res.json({
+      success: true,
+      recipient_id: recipient.id,
+      email: recipient.email,
+      name: recipient.name,
+      status: recipient.status,
+      first_replied_at: recipient.first_replied_at,
+      tat_reply_seconds: recipient.tat_reply_seconds,
+      tat_reply_formatted: formatTAT(recipient.tat_reply_seconds),
+      campaign_subject: recipient.campaign_subject,
+      has_reply: recipient.status === 'REPLIED' || Boolean(latestReply),
+      body_available: bodyAvailable,
+      latest_reply: latestReply ? {
+        id: latestReply.id,
+        gmail_message_id: latestReply.gmail_message_id,
+        gmail_thread_id: latestReply.gmail_thread_id,
+        sender_name: latestReply.sender_name || recipient.name,
+        sender_email: latestReply.sender_email || recipient.email,
+        received_at: latestReply.received_at,
+        body_text: latestReply.body_text,
+        body_html: latestReply.body_html
+      } : null,
+      replies: result.replies || []
+    });
+  } catch (err) {
+    console.error('Error fetching reply from Gmail:', err);
     res.status(500).json({ error: err.message });
   }
 });

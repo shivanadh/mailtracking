@@ -64,7 +64,38 @@ async function getDb() {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS recipient_replies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipient_id INTEGER NOT NULL,
+      gmail_message_id TEXT,
+      gmail_thread_id TEXT,
+      sender_name TEXT,
+      sender_email TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      body_text TEXT,
+      body_html TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (recipient_id) REFERENCES recipients(id) ON DELETE CASCADE
+    );
   `);
+
+  // Migration helper to add new columns to recipients table if sqlite database already exists
+  const recipientColumns = await dbInstance.all(`PRAGMA table_info(recipients);`);
+  const colNames = recipientColumns.map(c => c.name);
+
+  if (!colNames.includes('latest_reply_message_id')) {
+    await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN latest_reply_message_id TEXT;`);
+  }
+  if (!colNames.includes('latest_reply_sender_name')) {
+    await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN latest_reply_sender_name TEXT;`);
+  }
+  if (!colNames.includes('latest_reply_sender_email')) {
+    await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN latest_reply_sender_email TEXT;`);
+  }
+  if (!colNames.includes('latest_reply_body_text')) {
+    await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN latest_reply_body_text TEXT;`);
+  }
 
   return dbInstance;
 }

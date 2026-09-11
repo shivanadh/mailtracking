@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
   X, Search, Mail, CheckCircle2, Clock, AlertTriangle, ShieldCheck, 
-  RefreshCw, ExternalLink, Eye
+  RefreshCw, ExternalLink, Eye, MessageSquare 
 } from 'lucide-react';
+import ReplyDrawer from './ReplyDrawer';
 
 export default function RecipientLogsDrawer({
   isOpen,
@@ -16,6 +17,7 @@ export default function RecipientLogsDrawer({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [activeReplyRecipientId, setActiveReplyRecipientId] = useState(null);
 
   const isActioned = segment === 'actioned';
   const title = isActioned ? 'Actioned Logs' : 'Pending Action Logs';
@@ -300,12 +302,27 @@ export default function RecipientLogsDrawer({
                           </>
                         )}
 
-                        {/* External Link icon */}
+                        {/* Action column */}
                         <td className="py-3.5 px-4 text-right">
-                          <span className="inline-flex items-center gap-1 text-xs text-slate-500 group-hover:text-sky-400 transition-colors">
-                            <span>View</span>
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </span>
+                          <div className="flex items-center justify-end gap-2">
+                            {r.status === 'REPLIED' && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveReplyRecipientId(r.id);
+                                }}
+                                className="px-2.5 py-1 text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded-lg border border-emerald-500/30 transition-all flex items-center gap-1 cursor-pointer font-medium"
+                                title="View Recipient Reply Message"
+                              >
+                                <MessageSquare className="w-3 h-3 text-emerald-400" />
+                                <span>View Reply</span>
+                              </button>
+                            )}
+                            <span className="inline-flex items-center gap-1 text-xs text-slate-500 group-hover:text-sky-400 transition-colors">
+                              <span>Campaign</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
                         </td>
 
                       </tr>
@@ -325,6 +342,13 @@ export default function RecipientLogsDrawer({
 
         </div>
       </div>
+      {/* Reply Message Drawer */}
+      <ReplyDrawer
+        isOpen={Boolean(activeReplyRecipientId)}
+        onClose={() => setActiveReplyRecipientId(null)}
+        recipientId={activeReplyRecipientId}
+      />
+
     </div>
   );
 }

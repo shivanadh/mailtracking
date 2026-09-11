@@ -3,6 +3,7 @@ import {
   ArrowLeft, RefreshCw, Eye, MessageSquare, Clock, Zap, CheckCircle2, 
   Mail, Play, History, Globe, Shield, Sparkles, Filter, Trash2, ChevronRight 
 } from 'lucide-react';
+import ReplyDrawer from './ReplyDrawer';
 
 export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign }) {
   const [data, setData] = useState(null);
@@ -20,6 +21,8 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
   const [simReplyText, setSimReplyText] = useState('Thanks for the update! Everything looks great on our end.');
   const [simDelayMins, setSimDelayMins] = useState(15);
   const [simulating, setSimulating] = useState(false);
+
+  const [activeReplyRecipientId, setActiveReplyRecipientId] = useState(null);
 
   const fetchCampaignDetail = async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
@@ -358,6 +361,12 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                           <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-[180px]" title={rec.reply_snippet || ''}>
                             "{rec.reply_snippet || 'Reply received'}"
                           </div>
+                          <button
+                            onClick={() => setActiveReplyRecipientId(rec.id)}
+                            className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+                          >
+                            <MessageSquare className="w-3 h-3" /> View Reply
+                          </button>
                         </div>
                       ) : (
                         <span className="text-xs text-slate-500 italic">No reply yet</span>
@@ -394,6 +403,18 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                           <MessageSquare className="w-3 h-3 text-emerald-400" />
                           <span>Reply</span>
                         </button>
+
+                        {/* View Reply Button if replied */}
+                        {rec.status === 'REPLIED' && (
+                          <button
+                            onClick={() => setActiveReplyRecipientId(rec.id)}
+                            className="px-2.5 py-1 text-xs bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded-lg border border-emerald-500/30 transition-all flex items-center gap-1 cursor-pointer font-medium"
+                            title="View Recipient Reply Message"
+                          >
+                            <MessageSquare className="w-3 h-3 text-emerald-400" />
+                            <span>View Reply</span>
+                          </button>
+                        )}
 
                         {/* View Logs Button */}
                         <button
@@ -558,6 +579,13 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
           </div>
         </div>
       )}
+
+      {/* Reply Message Drawer */}
+      <ReplyDrawer
+        isOpen={Boolean(activeReplyRecipientId)}
+        onClose={() => setActiveReplyRecipientId(null)}
+        recipientId={activeReplyRecipientId}
+      />
 
     </div>
   );
