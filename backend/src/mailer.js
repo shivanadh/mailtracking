@@ -2,8 +2,9 @@ const { google } = require('googleapis');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const { getDb } = require('./db');
 const { getSettings, getOAuth2Client } = require('./googleAuth');
+const { assignRecipient } = require('./assignmentEngine');
 
-async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
+async function sendCampaign({ title, subject, body, recipients, baseUrl, departmentIds }) {
   const db = await getDb();
   const config = await getSettings();
   const now = new Date().toISOString();
@@ -23,6 +24,15 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
     ]
   );
   const campaignId = campaignResult.lastID;
+
+  // Store campaign-department associations
+  const validDeptIds = departmentIds || [];
+  for (const deptId of validDeptIds) {
+    await db.run(
+      'INSERT OR IGNORE INTO campaign_departments (campaign_id, department_id) VALUES (?, ?)',
+      [campaignId, deptId]
+    );
+  }
 
   let oauth2Client = null;
   let gmail = null;
@@ -105,6 +115,16 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
       [threadId, messageId, recipientId]
     );
 
+    // Run auto-assignment engine
+    try {
+      await assignRecipient(recipientId, {
+        campaignDepartmentIds: validDeptIds,
+        subject: subject
+      });
+    } catch (assignErr) {
+      console.error(`Assignment engine error for recipient ${recipientId}:`, assignErr.message);
+    }
+
     createdRecipients.push({
       id: recipientId,
       campaign_id: campaignId,
@@ -125,8 +145,10 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl }) {
     sent_at: now,
     total_recipients: createdRecipients.length,
     recipients: createdRecipients,
+    departments: validDeptIds,
     mode: (gmail && config.mode === 'oauth') ? 'gmail_oauth' : 'simulation'
   };
 }
 
 module.exports = { sendCampaign };
+

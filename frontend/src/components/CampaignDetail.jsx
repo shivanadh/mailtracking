@@ -4,6 +4,7 @@ import {
   Mail, Play, History, Globe, Shield, Sparkles, Filter, Trash2, ChevronRight 
 } from 'lucide-react';
 import ReplyDrawer from './ReplyDrawer';
+import { DepartmentBadge, AssignmentBadge } from './DepartmentManager';
 
 export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign }) {
   const [data, setData] = useState(null);
@@ -200,6 +201,13 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
               {data.title && data.title !== data.subject && (
                 <p className="text-sm text-slate-400 mt-0.5">{data.title}</p>
               )}
+              {data.departments && data.departments.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {data.departments.map(d => (
+                    <DepartmentBadge key={d.id} name={d.name} />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -314,6 +322,12 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                     <td className="px-5 py-4">
                       <div className="font-medium text-white">{rec.name || 'Recipient'}</div>
                       <div className="text-xs text-slate-400 font-mono">{rec.email}</div>
+                      {(rec.department_name || rec.assignment_source) && (
+                        <div className="flex items-center gap-1.5 mt-1">
+                          {rec.department_name && <DepartmentBadge name={rec.department_name} small />}
+                          {rec.assignment_source && <AssignmentBadge source={rec.assignment_source} small />}
+                        </div>
+                      )}
                     </td>
 
                     {/* Status Badge */}

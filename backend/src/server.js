@@ -5,6 +5,8 @@ const { getDb } = require('./db');
 const { getSettings, saveSettings, generateAuthUrl, handleAuthCallback } = require('./googleAuth');
 const { sendCampaign } = require('./mailer');
 const { syncReplies, simulateReply, fetchRecipientReplyFromGmail } = require('./replyPoller');
+const departmentRoutes = require('./departmentRoutes');
+const { assignRecipient } = require('./assignmentEngine');
 
 dotenv.config();
 
@@ -13,6 +15,9 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json());
+
+// Mount department management routes
+app.use(departmentRoutes);
 
 // 1x1 Transparent PNG Buffer
 const TRANSPARENT_PNG = Buffer.from(
@@ -97,17 +102,60 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
 // -------------------------------------------------------------
 app.post('/api/campaigns', async (req, res) => {
   try {
-    const { title, subject, body, recipients } = req.body;
+    const { title, subject, body, recipients: manualRecipients, departmentIds } = req.body;
 
-    if (!subject || !body || !recipients || !Array.isArray(recipients) || recipients.length === 0) {
-      return res.status(400).json({ error: 'Subject, body, and a non-empty list of recipients are required.' });
+    if (!subject || !body) {
+      return res.status(400).json({ error: 'Subject and body are required.' });
+    }
+
+    // Build combined recipient list from manual + department participants
+    let allRecipients = [];
+    const seenEmails = new Set();
+
+    // Load department participants if departmentIds provided
+    const validDeptIds = [];
+    if (departmentIds && Array.isArray(departmentIds) && departmentIds.length > 0) {
+      const db = await getDb();
+      for (const deptId of departmentIds) {
+        const dept = await db.get('SELECT id FROM departments WHERE id = ? AND status = ?', [parseInt(deptId, 10), 'active']);
+        if (dept) {
+          validDeptIds.push(dept.id);
+          const participants = await db.all(
+            'SELECT name, email FROM department_participants WHERE department_id = ? AND status = ?',
+            [dept.id, 'active']
+          );
+          for (const p of participants) {
+            const emailKey = p.email.toLowerCase().trim();
+            if (!seenEmails.has(emailKey)) {
+              seenEmails.add(emailKey);
+              allRecipients.push({ email: p.email, name: p.name });
+            }
+          }
+        }
+      }
+    }
+
+    // Add manual recipients (deduplicate against department participants)
+    if (manualRecipients && Array.isArray(manualRecipients)) {
+      for (const rec of manualRecipients) {
+        const email = (rec.email || rec).toString().trim();
+        const emailKey = email.toLowerCase();
+        if (email && email.includes('@') && !seenEmails.has(emailKey)) {
+          seenEmails.add(emailKey);
+          allRecipients.push({ email, name: rec.name || email.split('@')[0] });
+        }
+      }
+    }
+
+    if (allRecipients.length === 0) {
+      return res.status(400).json({ error: 'No valid recipients after deduplication. Please add recipients or select departments with active participants.' });
     }
 
     const protocol = req.protocol;
     const host = req.get('host');
     const baseUrl = process.env.PUBLIC_URL || `${protocol}://${host}`;
 
-    const result = await sendCampaign({ title, subject, body, recipients, baseUrl });
+    const result = await sendCampaign({ title, subject, body, recipients: allRecipients, baseUrl, departmentIds: validDeptIds });
     res.status(201).json(result);
   } catch (err) {
     console.error('Error creating campaign:', err);
@@ -131,13 +179,24 @@ app.get('/api/campaigns', async (req, res) => {
       ORDER BY c.id DESC
     `);
 
-    const formatted = campaigns.map(c => ({
-      ...c,
-      avg_tat_open_formatted: formatTAT(c.avg_tat_open_seconds ? Math.round(c.avg_tat_open_seconds) : null),
-      avg_tat_reply_formatted: formatTAT(c.avg_tat_reply_seconds ? Math.round(c.avg_tat_reply_seconds) : null),
-      open_rate: c.total_recipients ? Math.round(((c.opened_count || 0) / c.total_recipients) * 100) : 0,
-      reply_rate: c.total_recipients ? Math.round(((c.replied_count || 0) / c.total_recipients) * 100) : 0
-    }));
+    // Fetch department associations for each campaign
+    const formatted = [];
+    for (const c of campaigns) {
+      const deptRows = await db.all(`
+        SELECT d.id, d.name FROM campaign_departments cd
+        JOIN departments d ON cd.department_id = d.id
+        WHERE cd.campaign_id = ?
+      `, [c.id]);
+
+      formatted.push({
+        ...c,
+        avg_tat_open_formatted: formatTAT(c.avg_tat_open_seconds ? Math.round(c.avg_tat_open_seconds) : null),
+        avg_tat_reply_formatted: formatTAT(c.avg_tat_reply_seconds ? Math.round(c.avg_tat_reply_seconds) : null),
+        open_rate: c.total_recipients ? Math.round(((c.opened_count || 0) / c.total_recipients) * 100) : 0,
+        reply_rate: c.total_recipients ? Math.round(((c.replied_count || 0) / c.total_recipients) * 100) : 0,
+        departments: deptRows
+      });
+    }
 
     res.json(formatted);
   } catch (err) {
@@ -155,13 +214,41 @@ app.get('/api/campaigns/:id', async (req, res) => {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
+    // Fetch department associations
+    const deptRows = await db.all(`
+      SELECT d.id, d.name, d.status FROM campaign_departments cd
+      JOIN departments d ON cd.department_id = d.id
+      WHERE cd.campaign_id = ?
+    `, [campaignId]);
+
     const recipients = await db.all('SELECT * FROM recipients WHERE campaign_id = ? ORDER BY id ASC', [campaignId]);
 
-    const formattedRecipients = recipients.map(r => ({
-      ...r,
-      tat_open_formatted: formatTAT(r.tat_open_seconds),
-      tat_reply_formatted: formatTAT(r.tat_reply_seconds)
-    }));
+    // Enrich recipients with assignment + department info
+    const formattedRecipients = [];
+    for (const r of recipients) {
+      const assignment = await db.get(
+        'SELECT * FROM recipient_assignments WHERE recipient_id = ?', [r.id]
+      );
+      let deptName = null;
+      let participantName = null;
+      if (r.assigned_department_id) {
+        const dept = await db.get('SELECT name FROM departments WHERE id = ?', [r.assigned_department_id]);
+        deptName = dept ? dept.name : null;
+      }
+      if (r.assigned_participant_id) {
+        const part = await db.get('SELECT name FROM department_participants WHERE id = ?', [r.assigned_participant_id]);
+        participantName = part ? part.name : null;
+      }
+      formattedRecipients.push({
+        ...r,
+        tat_open_formatted: formatTAT(r.tat_open_seconds),
+        tat_reply_formatted: formatTAT(r.tat_reply_seconds),
+        department_name: deptName,
+        participant_name: participantName,
+        assignment_source: assignment ? assignment.assignment_source : null,
+        assignment_confidence: assignment ? assignment.confidence : null
+      });
+    }
 
     // Campaign metrics
     const openedCount = recipients.filter(r => r.status === 'OPENED' || r.status === 'REPLIED').length;
@@ -175,6 +262,7 @@ app.get('/api/campaigns/:id', async (req, res) => {
 
     res.json({
       ...campaign,
+      departments: deptRows,
       recipients: formattedRecipients,
       metrics: {
         total_recipients: recipients.length,
@@ -281,9 +369,15 @@ app.get('/api/stats/recipients', async (req, res) => {
       SELECT 
         r.*,
         c.subject AS campaign_subject,
-        c.title AS campaign_title
+        c.title AS campaign_title,
+        d.name AS department_name,
+        dp.name AS participant_name,
+        ra.assignment_source
       FROM recipients r
       JOIN campaigns c ON r.campaign_id = c.id
+      LEFT JOIN departments d ON r.assigned_department_id = d.id
+      LEFT JOIN department_participants dp ON r.assigned_participant_id = dp.id
+      LEFT JOIN recipient_assignments ra ON ra.recipient_id = r.id
       WHERE 1=1
     `;
     const params = [];
@@ -385,9 +479,15 @@ app.get('/api/stats/team-action-logs', async (req, res) => {
       SELECT 
         r.*,
         c.subject AS campaign_subject,
-        c.title AS campaign_title
+        c.title AS campaign_title,
+        d.name AS department_name,
+        dp.name AS participant_name,
+        ra.assignment_source
       FROM recipients r
       JOIN campaigns c ON r.campaign_id = c.id
+      LEFT JOIN departments d ON r.assigned_department_id = d.id
+      LEFT JOIN department_participants dp ON r.assigned_participant_id = dp.id
+      LEFT JOIN recipient_assignments ra ON ra.recipient_id = r.id
       WHERE 1=1
     `;
     const params = [];

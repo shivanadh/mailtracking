@@ -1,6 +1,7 @@
 const { google } = require('googleapis');
 const { getDb } = require('./db');
 const { getSettings, getOAuth2Client } = require('./googleAuth');
+const { assignRecipient } = require('./assignmentEngine');
 
 function decodeBase64Url(data) {
   if (!data) return '';
@@ -146,6 +147,16 @@ async function processThreadMessagesForRecipient(db, gmail, recipient) {
 
         existingMsgIds.add(msg.id);
         updated = true;
+
+        // Re-run auto-assignment with reply context (only if currently unassigned)
+        try {
+          await assignRecipient(recipient.id, {
+            replyText: bodyText,
+            subject: headers.find(h => h.name.toLowerCase() === 'subject')?.value || ''
+          });
+        } catch (assignErr) {
+          console.error(`Reply assignment error for recipient ${recipient.id}:`, assignErr.message);
+        }
       }
     }
     return updated;

@@ -3,7 +3,8 @@ import Dashboard from './components/Dashboard';
 import CampaignDetail from './components/CampaignDetail';
 import NewCampaignModal from './components/NewCampaignModal';
 import SettingsModal from './components/SettingsModal';
-import { Mail, ShieldCheck, Zap, Layers, RefreshCw } from 'lucide-react';
+import DepartmentManager from './components/DepartmentManager';
+import { Mail, ShieldCheck, Zap, Layers, RefreshCw, Building2 } from 'lucide-react';
 
 export default function App() {
   const [campaigns, setCampaigns] = useState([]);
@@ -13,6 +14,9 @@ export default function App() {
   // Modals
   const [isNewCampaignOpen, setIsNewCampaignOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Views
+  const [activeView, setActiveView] = useState('dashboard'); // 'dashboard' | 'departments'
 
   // App settings state (mode, userEmail)
   const [appSettings, setAppSettings] = useState(null);
@@ -52,6 +56,7 @@ export default function App() {
     fetchCampaigns();
     if (newCampaign && newCampaign.campaignId) {
       setSelectedCampaignId(newCampaign.campaignId);
+      setActiveView('dashboard');
     }
   };
 
@@ -75,7 +80,7 @@ export default function App() {
           
           {/* Logo & Title */}
           <div 
-            onClick={() => setSelectedCampaignId(null)} 
+            onClick={() => { setSelectedCampaignId(null); setActiveView('dashboard'); }} 
             className="flex items-center gap-3 cursor-pointer group"
           >
             <div className="p-2.5 rounded-xl bg-gradient-to-tr from-sky-500 to-blue-600 shadow-md shadow-sky-500/20 text-white group-hover:scale-105 transition-transform">
@@ -117,6 +122,18 @@ export default function App() {
             )}
 
             <button
+              onClick={() => { setActiveView('departments'); setSelectedCampaignId(null); }}
+              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold rounded-xl border transition-all cursor-pointer ${
+                activeView === 'departments'
+                  ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400'
+                  : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white hover:border-slate-700'
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Departments</span>
+            </button>
+
+            <button
               onClick={() => setIsNewCampaignOpen(true)}
               className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-white text-xs font-semibold rounded-xl shadow-md shadow-sky-500/20 transition-all cursor-pointer"
             >
@@ -129,7 +146,11 @@ export default function App() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 md:p-8">
-        {selectedCampaignId ? (
+        {activeView === 'departments' ? (
+          <DepartmentManager
+            onBack={() => setActiveView('dashboard')}
+          />
+        ) : selectedCampaignId ? (
           <CampaignDetail
             campaignId={selectedCampaignId}
             onBack={() => {
@@ -146,6 +167,7 @@ export default function App() {
             onSelectCampaign={(id) => setSelectedCampaignId(id)}
             onOpenNewCampaignModal={() => setIsNewCampaignOpen(true)}
             onOpenSettingsModal={() => setIsSettingsOpen(true)}
+            onOpenDepartments={() => setActiveView('departments')}
           />
         )}
       </main>
@@ -180,3 +202,4 @@ export default function App() {
     </div>
   );
 }
+

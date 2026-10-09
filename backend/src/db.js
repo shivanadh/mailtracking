@@ -78,6 +78,65 @@ async function getDb() {
       created_at TEXT NOT NULL,
       FOREIGN KEY (recipient_id) REFERENCES recipients(id) ON DELETE CASCADE
     );
+
+    -- Department management tables
+    CREATE TABLE IF NOT EXISTS departments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS department_participants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL,
+      employee_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (department_id) REFERENCES departments(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS department_account_codes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      department_id INTEGER NOT NULL,
+      account_code TEXT NOT NULL,
+      description TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      UNIQUE(department_id, account_code)
+    );
+
+    CREATE TABLE IF NOT EXISTS campaign_departments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL,
+      department_id INTEGER NOT NULL,
+      FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      UNIQUE(campaign_id, department_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS recipient_assignments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      recipient_id INTEGER NOT NULL,
+      department_id INTEGER,
+      participant_id INTEGER,
+      assignment_source TEXT NOT NULL,
+      confidence TEXT NOT NULL DEFAULT 'high',
+      evidence TEXT,
+      assigned_at TEXT NOT NULL,
+      FOREIGN KEY (recipient_id) REFERENCES recipients(id) ON DELETE CASCADE,
+      FOREIGN KEY (department_id) REFERENCES departments(id),
+      FOREIGN KEY (participant_id) REFERENCES department_participants(id)
+    );
+  `);
+
+  // Create indexes (idempotent)
+  await dbInstance.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_dp_dept_email
+      ON department_participants(department_id, email);
   `);
 
   // Migration helper to add new columns to recipients table if sqlite database already exists
@@ -95,6 +154,12 @@ async function getDb() {
   }
   if (!colNames.includes('latest_reply_body_text')) {
     await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN latest_reply_body_text TEXT;`);
+  }
+  if (!colNames.includes('assigned_department_id')) {
+    await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN assigned_department_id INTEGER;`);
+  }
+  if (!colNames.includes('assigned_participant_id')) {
+    await dbInstance.exec(`ALTER TABLE recipients ADD COLUMN assigned_participant_id INTEGER;`);
   }
 
   return dbInstance;

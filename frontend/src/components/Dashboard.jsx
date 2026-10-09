@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Mail, Eye, MessageSquare, Clock, Zap, BarChart2, TrendingUp, 
   Settings, RefreshCw, ChevronRight, Trash2, Shield, Users,
-  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer, ListFilter
+  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer, ListFilter, Building2
 } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 import RecipientLogsDrawer from './RecipientLogsDrawer';
 import TeamActionLogsDrawer from './TeamActionLogsDrawer';
+import { DepartmentBadge } from './DepartmentManager';
 
 export default function Dashboard({ 
   campaigns, 
@@ -14,7 +15,8 @@ export default function Dashboard({
   onRefresh, 
   onSelectCampaign, 
   onOpenNewCampaignModal, 
-  onOpenSettingsModal 
+  onOpenSettingsModal,
+  onOpenDepartments 
 }) {
   const [syncing, setSyncing] = useState(false);
   const [teamStats, setTeamStats] = useState(null);
@@ -111,6 +113,14 @@ export default function Dashboard({
           >
             <Settings className="w-4 h-4 text-slate-400" />
             <span>Settings</span>
+          </button>
+
+          <button
+            onClick={onOpenDepartments}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl border border-slate-800 text-sm transition-all cursor-pointer"
+          >
+            <Building2 className="w-4 h-4 text-indigo-400" />
+            <span>Departments</span>
           </button>
 
           <button
@@ -518,6 +528,13 @@ export default function Dashboard({
                       <div className="font-semibold text-white group-hover:text-sky-400 transition-colors">{c.subject}</div>
                       {c.title && c.title !== c.subject && (
                         <div className="text-xs text-slate-400 mt-0.5">{c.title}</div>
+                      )}
+                      {c.departments && c.departments.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {c.departments.map(d => (
+                            <DepartmentBadge key={d.id} name={d.name} small />
+                          ))}
+                        </div>
                       )}
                     </td>
 
