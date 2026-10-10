@@ -260,6 +260,9 @@ async function simulateReply(recipientId, customSnippet, customMinutesDelay) {
   if (!recipient) {
     throw new Error('Recipient not found');
   }
+  if (!recipient.sent_at) {
+    throw new Error('Cannot simulate reply for an unsent recipient.');
+  }
 
   const sentTime = new Date(recipient.sent_at).getTime();
   let replyTimeMs = Date.now();

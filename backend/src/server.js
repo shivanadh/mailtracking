@@ -6,7 +6,9 @@ const { getSettings, saveSettings, generateAuthUrl, handleAuthCallback } = requi
 const { sendCampaign } = require('./mailer');
 const { syncReplies, simulateReply, fetchRecipientReplyFromGmail } = require('./replyPoller');
 const departmentRoutes = require('./departmentRoutes');
+const templateRoutes = require('./templateRoutes');
 const { assignRecipient } = require('./assignmentEngine');
+const { startScheduler } = require('./schedulerWorker');
 
 dotenv.config();
 
@@ -18,6 +20,9 @@ app.use(express.json());
 
 // Mount department management routes
 app.use(departmentRoutes);
+
+// Mount template routes
+app.use(templateRoutes);
 
 // 1x1 Transparent PNG Buffer
 const TRANSPARENT_PNG = Buffer.from(
@@ -67,10 +72,16 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
 
     const now = new Date().toISOString();
     const nowMs = Date.now();
-    const sentMs = new Date(recipient.sent_at).getTime();
-    const tatOpenSeconds = Math.max(0, Math.floor((nowMs - sentMs) / 1000));
-
     const isFirstOpen = !recipient.first_opened_at;
+    
+    let tatOpenSeconds = recipient.tat_open_seconds;
+    if (!recipient.sent_at) {
+      tatOpenSeconds = tatOpenSeconds || null;
+    } else if (isFirstOpen) {
+      const sentMs = new Date(recipient.sent_at).getTime();
+      tatOpenSeconds = Math.max(0, Math.floor((nowMs - sentMs) / 1000));
+    }
+
     const newStatus = recipient.status === 'SENT' ? 'OPENED' : recipient.status;
 
     await db.run(
@@ -102,7 +113,7 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
 // -------------------------------------------------------------
 app.post('/api/campaigns', async (req, res) => {
   try {
-    const { title, subject, body, recipients: manualRecipients, departmentIds } = req.body;
+    const { title, subject, body, recipients: manualRecipients, departmentIds, scheduleAt, scheduleTimezone, templateId, followupEnabled, followupDays, followupTemplateId } = req.body;
 
     if (!subject || !body) {
       return res.status(400).json({ error: 'Subject and body are required.' });
@@ -155,7 +166,7 @@ app.post('/api/campaigns', async (req, res) => {
     const host = req.get('host');
     const baseUrl = process.env.PUBLIC_URL || `${protocol}://${host}`;
 
-    const result = await sendCampaign({ title, subject, body, recipients: allRecipients, baseUrl, departmentIds: validDeptIds });
+    const result = await sendCampaign({ title, subject, body, recipients: allRecipients, baseUrl, departmentIds: validDeptIds, scheduleAt, scheduleTimezone, templateId, followupEnabled, followupDays, followupTemplateId });
     res.status(201).json(result);
   } catch (err) {
     console.error('Error creating campaign:', err);
@@ -292,13 +303,92 @@ app.delete('/api/campaigns/:id', async (req, res) => {
   }
 });
 
+app.put('/api/campaigns/:id/status', async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id, 10);
+    const { status } = req.body; // 'paused', 'cancelled', 'scheduled'
+    if (!['paused', 'cancelled', 'scheduled'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    const db = await getDb();
+    const campaign = await db.get('SELECT * FROM campaigns WHERE id = ?', [campaignId]);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    
+    if (campaign.campaign_status === 'sent' || campaign.campaign_status === 'completed_with_errors' || campaign.campaign_status === 'sending') {
+      return res.status(400).json({ error: 'Cannot change status of a sent or processing campaign' });
+    }
+
+    await db.run('UPDATE campaigns SET campaign_status = ? WHERE id = ?', [status, campaignId]);
+    
+    const jobStatus = status === 'scheduled' ? 'pending' : status;
+    await db.run('UPDATE scheduled_jobs SET status = ?, updated_at = ? WHERE campaign_id = ? AND status IN ("pending", "paused")', [jobStatus, new Date().toISOString(), campaignId]);
+    
+    res.json({ success: true, message: `Campaign status updated to ${status}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/campaigns/:id/export', async (req, res) => {
+  try {
+    const campaignId = parseInt(req.params.id, 10);
+    const db = await getDb();
+    const campaign = await db.get('SELECT * FROM campaigns WHERE id = ?', [campaignId]);
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+    
+    const recipients = await db.all('SELECT * FROM recipients WHERE campaign_id = ?', [campaignId]);
+    
+    const xlsx = require('xlsx');
+    const wb = xlsx.utils.book_new();
+    
+    // Summary Sheet
+    const summaryData = [
+      ['Campaign Subject', campaign.subject],
+      ['Label', campaign.title],
+      ['Status', campaign.campaign_status],
+      ['Total Recipients', campaign.total_recipients],
+      ['Sent Date', campaign.sent_at || 'N/A'],
+      ['Scheduled Date', campaign.schedule_at || 'N/A']
+    ];
+    const wsSummary = xlsx.utils.aoa_to_sheet(summaryData);
+    xlsx.utils.book_append_sheet(wb, wsSummary, 'Summary');
+    
+    // Recipients Sheet
+    const recipientsData = recipients.map(r => ({
+      'Name': r.name,
+      'Email': r.email,
+      'Status': r.status,
+      'Send Status': r.send_status,
+      'Sent At': r.sent_at || 'N/A',
+      'First Opened At': r.first_opened_at || 'N/A',
+      'Open Count': r.open_count,
+      'TAT Open (s)': r.tat_open_seconds || 'N/A',
+      'First Replied At': r.first_replied_at || 'N/A',
+      'Reply Count': r.reply_count,
+      'TAT Reply (s)': r.tat_reply_seconds || 'N/A',
+      'Follow-up Status': r.followup_status
+    }));
+    const wsRecipients = xlsx.utils.json_to_sheet(recipientsData);
+    xlsx.utils.book_append_sheet(wb, wsRecipients, 'Recipients');
+    
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    
+    res.setHeader('Content-Disposition', `attachment; filename="campaign_${campaignId}_report.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // -------------------------------------------------------------
 // TEAM OVERALL STATS & 48H SLA METRICS ENDPOINT
 // -------------------------------------------------------------
 app.get('/api/stats/team', async (req, res) => {
   try {
     const db = await getDb();
-    const recipients = await db.all('SELECT * FROM recipients');
+    // Exclude unsent recipients from metrics
+    const recipients = (await db.all('SELECT * FROM recipients')).filter(r => r.send_status === 'sent' && r.sent_at);
     const totalReceived = recipients.length;
 
     const actionedRecipients = recipients.filter(r => r.status === 'REPLIED');
@@ -414,8 +504,8 @@ app.get('/api/stats/recipients', async (req, res) => {
     const nowMs = Date.now();
 
     const formattedRecipients = recipients.map(r => {
-      const sentMs = new Date(r.sent_at).getTime();
-      const waitingTatSec = Math.max(0, Math.floor((nowMs - sentMs) / 1000));
+      const sentMs = r.sent_at ? new Date(r.sent_at).getTime() : nowMs;
+      const waitingTatSec = r.sent_at ? Math.max(0, Math.floor((nowMs - sentMs) / 1000)) : 0;
       
       let slaStatus = 'ON_TRACK';
       let slaLabel = 'On Track';
@@ -488,7 +578,7 @@ app.get('/api/stats/team-action-logs', async (req, res) => {
       LEFT JOIN departments d ON r.assigned_department_id = d.id
       LEFT JOIN department_participants dp ON r.assigned_participant_id = dp.id
       LEFT JOIN recipient_assignments ra ON ra.recipient_id = r.id
-      WHERE 1=1
+      WHERE r.send_status = 'sent' AND r.sent_at IS NOT NULL
     `;
     const params = [];
 
@@ -518,7 +608,7 @@ app.get('/api/stats/team-action-logs', async (req, res) => {
     const allMatching = await db.all(query, params);
 
     // Reconcile total actioned vs total pending for overall context
-    const allDbRecipients = await db.all('SELECT status FROM recipients');
+    const allDbRecipients = await db.all("SELECT status FROM recipients WHERE send_status = 'sent' AND sent_at IS NOT NULL");
     const totalActionedCount = allDbRecipients.filter(r => r.status === 'REPLIED').length;
     const totalPendingCount = allDbRecipients.filter(r => r.status !== 'REPLIED').length;
 
@@ -975,6 +1065,8 @@ setInterval(async () => {
     // silent background catch
   }
 }, 60000);
+
+startScheduler();
 
 app.listen(PORT, () => {
   console.log(`MailTracking Backend running at http://localhost:${PORT}`);

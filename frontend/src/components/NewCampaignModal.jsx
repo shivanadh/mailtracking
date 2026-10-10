@@ -21,12 +21,51 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
   const [deptParticipants, setDeptParticipants] = useState({}); // deptId -> participants[]
   const [showDeptSection, setShowDeptSection] = useState(false);
   const [loadingDepts, setLoadingDepts] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+
+  // Scheduling state
+  const [scheduleMode, setScheduleMode] = useState('now'); // 'now' or 'later'
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [scheduleTimezone, setScheduleTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+  // Follow-up state
+  const [followupEnabled, setFollowupEnabled] = useState(false);
+  const [followupDays, setFollowupDays] = useState(3);
+  const [followupTemplateId, setFollowupTemplateId] = useState('');
 
   useEffect(() => {
     if (isOpen) {
       fetchDepartments();
+      fetchTemplates();
     }
   }, [isOpen]);
+
+  const fetchTemplates = async () => {
+    try {
+      const res = await fetch('/api/templates?status=approved');
+      if (res.ok) {
+        const data = await res.json();
+        setTemplates(Array.isArray(data) ? data : (data.templates || []));
+      }
+    } catch (e) {
+      console.error('Failed to fetch templates:', e);
+    }
+  };
+
+  const handleTemplateChange = (e) => {
+    const tid = e.target.value;
+    setSelectedTemplateId(tid);
+    if (tid) {
+      const template = templates.find(t => t.id === parseInt(tid, 10));
+      if (template) {
+        setSubject(template.subject);
+        setBody(template.body);
+        if (!title) setTitle(template.name);
+      }
+    }
+  };
 
   const fetchDepartments = async () => {
     setLoadingDepts(true);
@@ -183,6 +222,29 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
       return;
     }
 
+    let finalScheduleAt = null;
+    if (scheduleMode === 'later') {
+      if (!scheduleDate || !scheduleTime) {
+        setError('Please provide a valid date and time for scheduling.');
+        return;
+      }
+      const localDt = new Date(`${scheduleDate}T${scheduleTime}`);
+      if (isNaN(localDt.getTime())) {
+        setError('Invalid schedule date/time.');
+        return;
+      }
+      if (localDt.getTime() < Date.now()) {
+        setError('Schedule time must be in the future.');
+        return;
+      }
+      finalScheduleAt = localDt.toISOString();
+    }
+
+    if (followupEnabled && !followupTemplateId) {
+      setError('Please select a follow-up template.');
+      return;
+    }
+
     setError(null);
     setIsSending(true);
 
@@ -195,7 +257,13 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
           subject: subject.trim(),
           body: body.trim(),
           recipients: manualRecipients,
-          departmentIds: selectedDeptIds.length > 0 ? selectedDeptIds : undefined
+          departmentIds: selectedDeptIds.length > 0 ? selectedDeptIds : undefined,
+          templateId: selectedTemplateId ? parseInt(selectedTemplateId, 10) : undefined,
+          scheduleAt: finalScheduleAt,
+          scheduleTimezone: scheduleMode === 'later' ? scheduleTimezone : undefined,
+          followupEnabled,
+          followupDays: parseInt(followupDays, 10),
+          followupTemplateId: followupTemplateId ? parseInt(followupTemplateId, 10) : undefined
         })
       });
 
@@ -280,6 +348,21 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
             <>
               {/* Campaign Title & Subject */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Use Template (Optional)
+                  </label>
+                  <select
+                    value={selectedTemplateId}
+                    onChange={handleTemplateChange}
+                    className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 transition-colors"
+                  >
+                    <option value="">-- Start from scratch --</option>
+                    {templates.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
                     Campaign Internal Label
@@ -462,6 +545,110 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
                   className="w-full bg-slate-900 border border-slate-700/70 rounded-xl p-3.5 text-sm text-slate-100 placeholder-slate-500 font-mono focus:outline-none focus:border-sky-500 transition-colors custom-scrollbar"
                 />
               </div>
+
+              {/* Scheduling Section */}
+              <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
+                <div className="flex items-center gap-4 mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="radio" 
+                      name="schedule" 
+                      value="now" 
+                      checked={scheduleMode === 'now'}
+                      onChange={() => setScheduleMode('now')}
+                      className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700"
+                    />
+                    <span className="text-sm font-medium text-slate-200">Send Now</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="radio" 
+                      name="schedule" 
+                      value="later" 
+                      checked={scheduleMode === 'later'}
+                      onChange={() => setScheduleMode('later')}
+                      className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700"
+                    />
+                    <span className="text-sm font-medium text-slate-200">Schedule for Later</span>
+                  </label>
+                </div>
+                
+                {scheduleMode === 'later' && (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-800">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Date</label>
+                      <input 
+                        type="date" 
+                        value={scheduleDate}
+                        onChange={(e) => setScheduleDate(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Time</label>
+                      <input 
+                        type="time" 
+                        value={scheduleTime}
+                        onChange={(e) => setScheduleTime(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Timezone</label>
+                      <input 
+                        type="text"
+                        disabled
+                        value={scheduleTimezone}
+                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-slate-400 cursor-not-allowed"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Follow-up Section */}
+              <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      checked={followupEnabled}
+                      onChange={(e) => setFollowupEnabled(e.target.checked)}
+                      className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700 rounded"
+                    />
+                    <span className="text-sm font-medium text-slate-200">Enable Auto Follow-up</span>
+                  </label>
+                </div>
+                
+                {followupEnabled && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 mt-2 border-t border-slate-800">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Wait Days</label>
+                      <input 
+                        type="number" 
+                        min="1"
+                        max="30"
+                        value={followupDays}
+                        onChange={(e) => setFollowupDays(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Follow-up Template <span className="text-red-400">*</span></label>
+                      <select
+                        value={followupTemplateId}
+                        onChange={(e) => setFollowupTemplateId(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                      >
+                        <option value="">-- Select Template --</option>
+                        {Array.isArray(templates) && templates.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             /* Live Preview Tab */
@@ -546,7 +733,7 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
               ) : (
                 <>
                   <Send className="w-4 h-4" />
-                  <span>Send Campaign Now</span>
+                  <span>{scheduleMode === 'later' ? 'Schedule Campaign' : 'Send Campaign Now'}</span>
                 </>
               )}
             </button>

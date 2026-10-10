@@ -539,7 +539,20 @@ export default function Dashboard({
                     </td>
 
                     <td className="px-4 py-4 text-xs text-slate-400">
-                      {new Date(c.sent_at).toLocaleDateString()} {new Date(c.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {c.campaign_status === 'scheduled' ? (
+                        <div className="flex items-center gap-1.5 text-amber-400">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>{new Date(c.schedule_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                        </div>
+                      ) : c.campaign_status === 'paused' ? (
+                        <span className="text-amber-500 font-medium bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">Paused</span>
+                      ) : c.campaign_status === 'sending' ? (
+                        <span className="text-sky-400 font-medium animate-pulse">Sending...</span>
+                      ) : c.campaign_status === 'cancelled' ? (
+                        <span className="text-red-400 font-medium">Cancelled</span>
+                      ) : (
+                        c.sent_at ? `${new Date(c.sent_at).toLocaleDateString()} ${new Date(c.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'N/A'
+                      )}
                     </td>
 
                     <td className="px-4 py-4 text-center font-medium text-white">
