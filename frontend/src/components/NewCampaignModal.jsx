@@ -1,5 +1,45 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, Users, Mail, Eye, Sparkles, FileText, CheckCircle2, AlertCircle, Building2, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  X,
+  Send,
+  Users,
+  Mail,
+  Eye,
+  Sparkles,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
+  Building2,
+  ChevronDown,
+  ChevronUp,
+  Wand2,
+  ArrowRight,
+  Clock,
+  UserCheck,
+  Edit3
+} from 'lucide-react';
+import AiEmailAssistantDrawer from './AiEmailAssistantDrawer';
+
+// Helper to detect unresolved bracketed or custom placeholder tags
+function findUnresolvedPlaceholders(text) {
+  if (!text) return [];
+  const found = new Set();
+
+  // Match [Date], [Deadline], [Amount], [Insert ...], [Name], [TODO]
+  const bracketMatches = text.match(/\[([a-zA-Z0-9_\s-]+)\]/g) || [];
+  bracketMatches.forEach(m => found.add(m));
+
+  // Match {{var}} where var is not 'name' or 'email'
+  const curlyMatches = text.match(/\{\{([^}]+)\}\}/g) || [];
+  curlyMatches.forEach(m => {
+    const clean = m.replace(/\{\{|\}\}/g, '').trim().toLowerCase();
+    if (clean !== 'name' && clean !== 'email') {
+      found.add(m);
+    }
+  });
+
+  return Array.from(found);
+}
 
 export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated }) {
   const [subject, setSubject] = useState('');
@@ -35,12 +75,34 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
   const [followupDays, setFollowupDays] = useState(3);
   const [followupTemplateId, setFollowupTemplateId] = useState('');
 
+  // AI Assistant drawer & verification state
+  const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
+  const [aiSuggestedDetails, setAiSuggestedDetails] = useState([]);
+  const [isPreviewReviewed, setIsPreviewReviewed] = useState(false);
+  const [senderEmail, setSenderEmail] = useState('');
+
   useEffect(() => {
     if (isOpen) {
       fetchDepartments();
       fetchTemplates();
+      fetchSenderSettings();
+      setIsPreviewReviewed(false);
     }
   }, [isOpen]);
+
+  const fetchSenderSettings = async () => {
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.userEmail) {
+          setSenderEmail(data.userEmail);
+        }
+      }
+    } catch (e) {
+      // non-critical
+    }
+  };
 
   const fetchTemplates = async () => {
     try {
@@ -63,6 +125,7 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
         setSubject(template.subject);
         setBody(template.body);
         if (!title) setTitle(template.name);
+        setIsPreviewReviewed(false);
       }
     }
   };
@@ -74,7 +137,6 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
       if (res.ok) {
         const data = await res.json();
         setDepartments(data);
-        // Pre-fetch participants for all departments
         const participantMap = {};
         for (const dept of data) {
           try {
@@ -100,6 +162,7 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
     setSelectedDeptIds(prev =>
       prev.includes(deptId) ? prev.filter(id => id !== deptId) : [...prev, deptId]
     );
+    setIsPreviewReviewed(false);
   };
 
   const toggleAllDepts = () => {
@@ -108,6 +171,7 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
     } else {
       setSelectedDeptIds(departments.map(d => d.id));
     }
+    setIsPreviewReviewed(false);
   };
 
   // Get participants from selected departments
@@ -136,7 +200,6 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
       line = line.trim();
       if (!line) continue;
 
-      // Check if format is "email (Name)" or "Name <email>" or simple "email"
       let email = '';
       let name = '';
 
@@ -171,7 +234,6 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
     const seen = new Set();
     const combined = [];
 
-    // Department recipients first
     for (const r of deptRecipients) {
       const key = r.email.toLowerCase().trim();
       if (!seen.has(key)) {
@@ -180,7 +242,6 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
       }
     }
 
-    // Then manual recipients
     for (const r of manualRecipients) {
       const key = r.email.toLowerCase().trim();
       if (!seen.has(key)) {
@@ -200,25 +261,72 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
     const reader = new FileReader();
     reader.onload = (event) => {
       setRawRecipients(event.target.result);
+      setIsPreviewReviewed(false);
     };
     reader.readAsText(file);
   };
 
   const insertVariable = (varName) => {
     setBody(prev => prev + ` {{${varName}}}`);
+    setIsPreviewReviewed(false);
   };
+
+  // Editing subject or body invalidates preview review state
+  const handleSubjectChange = (val) => {
+    setSubject(val);
+    setIsPreviewReviewed(false);
+  };
+
+  const handleBodyChange = (val) => {
+    setBody(val);
+    setIsPreviewReviewed(false);
+  };
+
+  // Apply AI draft from drawer
+  const handleApplyAiDraft = ({ subject: newSubject, body: newBody, suggestedDetails }) => {
+    if (newSubject) setSubject(newSubject);
+    if (newBody) setBody(newBody);
+    if (suggestedDetails && suggestedDetails.length > 0) {
+      setAiSuggestedDetails(suggestedDetails);
+    } else {
+      setAiSuggestedDetails([]);
+    }
+    setIsPreviewReviewed(false);
+    setError(null);
+  };
+
+  // Handle Tab Switch
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    if (tab === 'preview') {
+      setIsPreviewReviewed(true);
+      setError(null);
+    }
+  };
+
+  const unresolvedPlaceholders = findUnresolvedPlaceholders(`${subject} ${body}`);
 
   const handleSend = async () => {
     if (!subject.trim()) {
-      setError('Please provide a campaign subject.');
+      setError('Please provide a campaign subject line.');
+      setActiveTab('compose');
       return;
     }
     if (!body.trim()) {
       setError('Email body content cannot be empty.');
+      setActiveTab('compose');
       return;
     }
     if (combinedRecipients.length === 0) {
       setError('Please specify at least one valid recipient email address or select departments with active participants.');
+      return;
+    }
+
+    // Require review in Preview mode if draft was modified since last review
+    if (!isPreviewReviewed) {
+      setActiveTab('preview');
+      setIsPreviewReviewed(true);
+      setError('Please review the live personalized preview below before confirming dispatch.');
       return;
     }
 
@@ -281,467 +389,717 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
     }
   };
 
-  const selectedPreviewRecipient = combinedRecipients[previewIndex] || { name: 'Recipient Name', email: 'recipient@example.com' };
+  const selectedPreviewRecipient = combinedRecipients[previewIndex] || {
+    name: 'Recipient Name',
+    email: 'recipient@example.com'
+  };
+
+  // Safe personalization without injecting HTML tags or internal pixels
+  const previewSubject = subject.replace(/\{\{\s*name\s*\}\}/gi, selectedPreviewRecipient.name).replace(/\{\{\s*email\s*\}\}/gi, selectedPreviewRecipient.email);
   const previewBody = body
     .replace(/\{\{\s*name\s*\}\}/gi, selectedPreviewRecipient.name)
     .replace(/\{\{\s*email\s*\}\}/gi, selectedPreviewRecipient.email);
 
+  const selectedDeptNames = departments
+    .filter(d => selectedDeptIds.includes(d.id))
+    .map(d => d.name);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-      <div className="bg-[#111827] border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-        
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400">
-              <Mail className="w-5 h-5" />
+    <>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+        <div className="bg-[#111827] border border-slate-800 rounded-2xl w-full max-w-4xl max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+          
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400">
+                <Mail className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-white">Compose Group Mail Campaign</h2>
+                <p className="text-xs text-slate-400">Individual recipient fan-out with per-person TAT tracking</p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-white">Compose Group Mail Campaign</h2>
-              <p className="text-xs text-slate-400">Individual recipient fan-out with per-person TAT tracking</p>
-            </div>
+            <button 
+              onClick={onClose}
+              className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
-          <button 
-            onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
 
-        {/* Tab Selector */}
-        <div className="flex border-b border-slate-800 bg-slate-950/40 px-6 pt-2">
-          <button
-            onClick={() => setActiveTab('compose')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all ${
-              activeTab === 'compose'
-                ? 'border-sky-400 text-sky-400 bg-sky-500/10 rounded-t-lg'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            Campaign Composer
-          </button>
-          <button
-            onClick={() => setActiveTab('preview')}
-            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all ${
-              activeTab === 'preview'
-                ? 'border-sky-400 text-sky-400 bg-sky-500/10 rounded-t-lg'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Eye className="w-4 h-4" />
-            Live Preview ({combinedRecipients.length} Recipient{combinedRecipients.length !== 1 ? 's' : ''})
-          </button>
-        </div>
-
-        {/* Body Content */}
-        <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-5">
-          {error && (
-            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-center gap-2.5">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
+          {/* Tab Selector */}
+          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/40 px-6 pt-2">
+            <div className="flex">
+              <button
+                onClick={() => handleTabChange('compose')}
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'compose'
+                    ? 'border-sky-400 text-sky-400 bg-sky-500/10 rounded-t-lg'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Edit3 className="w-4 h-4" />
+                Campaign Composer
+              </button>
+              <button
+                onClick={() => handleTabChange('preview')}
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'preview'
+                    ? 'border-sky-400 text-sky-400 bg-sky-500/10 rounded-t-lg'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Eye className="w-4 h-4" />
+                Preview Email ({combinedRecipients.length} Recipient{combinedRecipients.length !== 1 ? 's' : ''})
+                {isPreviewReviewed && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" title="Preview Reviewed" />
+                )}
+              </button>
             </div>
-          )}
 
-          {activeTab === 'compose' ? (
-            <>
-              {/* Campaign Title & Subject */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="md:col-span-2">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                    Use Template (Optional)
-                  </label>
-                  <select
-                    value={selectedTemplateId}
-                    onChange={handleTemplateChange}
-                    className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 transition-colors"
+            {/* Quick AI Trigger Button in Tab Bar */}
+            <button
+              type="button"
+              onClick={() => setIsAiDrawerOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 mb-1.5 rounded-xl bg-gradient-to-r from-purple-600/20 to-sky-600/20 hover:from-purple-600/30 hover:to-sky-600/30 border border-purple-500/30 text-purple-300 hover:text-purple-100 text-xs font-semibold transition-all cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-purple-400 animate-pulse" />
+              <span>Generate with AI</span>
+            </button>
+          </div>
+
+          {/* Body Content */}
+          <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-5">
+            {error && (
+              <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {activeTab === 'compose' ? (
+              <>
+                {/* AI Assistant Banner Entry Point (Requirement 1) */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-purple-950/40 via-indigo-950/30 to-slate-900 border border-purple-500/30 rounded-2xl shadow-inner">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-gradient-to-tr from-purple-600 to-sky-500 text-white shadow-md shadow-purple-500/20">
+                      <Sparkles className="w-4 h-4 animate-pulse" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-white">Gemini AI Email Assistant</span>
+                        <span className="px-2 py-0.2 text-[10px] font-bold rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                          AI Powered
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Describe any situation or paste meeting notes to generate, polish, and revise a professional draft.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAiDrawerOpen(true)}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg shadow-purple-600/25 transition-all cursor-pointer whitespace-nowrap active:scale-95"
                   >
-                    <option value="">-- Start from scratch --</option>
-                    {templates.map(t => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
-                    ))}
-                  </select>
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Generate with AI</span>
+                  </button>
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                    Campaign Internal Label
-                  </label>
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="e.g. Q3 Project Milestone Check-in"
-                    className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                    Email Subject Line <span className="text-red-400">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                    placeholder="Action Required: Team Status & Deliverables"
-                    className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
-                  />
-                </div>
-              </div>
 
-              {/* Department Selection */}
-              <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
-                <button
-                  onClick={() => setShowDeptSection(!showDeptSection)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-slate-800/50 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <Building2 className="w-4 h-4 text-indigo-400" />
-                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                      Send to Departments
-                    </span>
-                    {selectedDeptIds.length > 0 && (
-                      <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
-                        {selectedDeptIds.length} selected · {deptRecipients.length} participants
-                      </span>
-                    )}
-                  </div>
-                  {showDeptSection ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-                </button>
-
-                {showDeptSection && (
-                  <div className="px-4 pb-4 border-t border-slate-800">
-                    {loadingDepts ? (
-                      <div className="py-4 text-center text-slate-500 text-sm">Loading departments...</div>
-                    ) : departments.length === 0 ? (
-                      <div className="py-4 text-center text-slate-500 text-sm">No active departments available. Create departments first.</div>
-                    ) : (
-                      <>
-                        <div className="flex items-center justify-between py-2">
-                          <span className="text-xs text-slate-400">Select departments to include their active participants as recipients</span>
-                          <button
-                            onClick={toggleAllDepts}
-                            className="text-xs text-sky-400 hover:text-sky-300 font-medium"
-                          >
-                            {selectedDeptIds.length === departments.length ? 'Deselect All' : 'Select All'}
-                          </button>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          {departments.map(dept => {
-                            const isSelected = selectedDeptIds.includes(dept.id);
-                            const pCount = (deptParticipants[dept.id] || []).length;
-                            return (
-                              <button
-                                key={dept.id}
-                                onClick={() => toggleDept(dept.id)}
-                                className={`flex items-center justify-between p-3 rounded-xl border text-left transition-all ${
-                                  isSelected
-                                    ? 'bg-indigo-500/10 border-indigo-500/30 text-white'
-                                    : 'bg-slate-950/40 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2.5">
-                                  <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-indigo-500 border-indigo-500' : 'border-slate-600'}`}>
-                                    {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
-                                  </div>
-                                  <div>
-                                    <div className="text-sm font-medium">{dept.name}</div>
-                                    {dept.description && <div className="text-[11px] text-slate-500">{dept.description}</div>}
-                                  </div>
-                                </div>
-                                <span className="text-xs text-slate-400 shrink-0 ml-2">{pCount} member{pCount !== 1 ? 's' : ''}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {/* Department Recipients Preview */}
-                        {selectedDeptIds.length > 0 && deptRecipients.length > 0 && (
-                          <div className="mt-3 p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
-                            <div className="text-xs font-semibold text-indigo-400 mb-1.5">
-                              {deptRecipients.length} unique participant{deptRecipients.length !== 1 ? 's' : ''} from selected departments:
-                            </div>
-                            <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto custom-scrollbar">
-                              {deptRecipients.map((r, i) => (
-                                <span key={i} className="px-2 py-0.5 bg-slate-800 text-slate-300 text-[11px] rounded-lg">{r.name} &lt;{r.email}&gt;</span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Recipients Input Area */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
-                    <Users className="w-3.5 h-3.5 text-sky-400" />
-                    Manual Recipients ({manualRecipients.length} Detected)
-                  </label>
-                  <label className="text-xs text-sky-400 hover:text-sky-300 cursor-pointer flex items-center gap-1">
-                    <FileText className="w-3.5 h-3.5" />
-                    Import CSV/TXT
-                    <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="hidden" />
-                  </label>
-                </div>
-                <textarea
-                  rows={4}
-                  value={rawRecipients}
-                  onChange={(e) => setRawRecipients(e.target.value)}
-                  placeholder="Enter emails separated by comma or new lines, e.g. alex@company.com (Alex Rivera)"
-                  className="w-full bg-slate-900 border border-slate-700/70 rounded-xl p-3.5 text-sm text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-sky-500 transition-colors custom-scrollbar"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Supported formats: <code className="text-sky-400">email@example.com</code> or <code className="text-sky-400">email@example.com (Full Name)</code> or <code className="text-sky-400">Full Name &lt;email@example.com&gt;</code>
-                </p>
-              </div>
-
-              {/* Combined Recipient Summary */}
-              {(selectedDeptIds.length > 0 && manualRecipients.length > 0) && (
-                <div className="p-3.5 rounded-xl bg-sky-500/5 border border-sky-500/20 text-sm">
-                  <div className="flex items-center gap-2 text-sky-400 font-semibold text-xs mb-1">
-                    <Users className="w-3.5 h-3.5" />
-                    Combined Recipient Preview (deduplicated)
-                  </div>
-                  <div className="text-slate-300 text-xs">
-                    <span className="text-indigo-400 font-medium">{deptRecipients.length}</span> from departments +{' '}
-                    <span className="text-sky-400 font-medium">{combinedRecipients.length - deptRecipients.length}</span> manual ={' '}
-                    <span className="text-white font-bold">{combinedRecipients.length}</span> total unique recipients
-                  </div>
-                </div>
-              )}
-
-              {/* Email Content Body */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Email Body HTML / Plain Text <span className="text-red-400">*</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px] text-slate-400">Insert Variable:</span>
-                    <button
-                      type="button"
-                      onClick={() => insertVariable('name')}
-                      className="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 rounded"
-                    >
-                      + Name
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => insertVariable('email')}
-                      className="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 rounded"
-                    >
-                      + Email
-                    </button>
-                  </div>
-                </div>
-                <textarea
-                  rows={6}
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700/70 rounded-xl p-3.5 text-sm text-slate-100 placeholder-slate-500 font-mono focus:outline-none focus:border-sky-500 transition-colors custom-scrollbar"
-                />
-              </div>
-
-              {/* Scheduling Section */}
-              <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
-                <div className="flex items-center gap-4 mb-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="schedule" 
-                      value="now" 
-                      checked={scheduleMode === 'now'}
-                      onChange={() => setScheduleMode('now')}
-                      className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700"
-                    />
-                    <span className="text-sm font-medium text-slate-200">Send Now</span>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input 
-                      type="radio" 
-                      name="schedule" 
-                      value="later" 
-                      checked={scheduleMode === 'later'}
-                      onChange={() => setScheduleMode('later')}
-                      className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700"
-                    />
-                    <span className="text-sm font-medium text-slate-200">Schedule for Later</span>
-                  </label>
-                </div>
-                
-                {scheduleMode === 'later' && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-800">
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Date</label>
-                      <input 
-                        type="date" 
-                        value={scheduleDate}
-                        onChange={(e) => setScheduleDate(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Time</label>
-                      <input 
-                        type="time" 
-                        value={scheduleTime}
-                        onChange={(e) => setScheduleTime(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Timezone</label>
-                      <input 
-                        type="text"
-                        disabled
-                        value={scheduleTimezone}
-                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-slate-400 cursor-not-allowed"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Follow-up Section */}
-              <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
-                <div className="flex items-center gap-4">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={followupEnabled}
-                      onChange={(e) => setFollowupEnabled(e.target.checked)}
-                      className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700 rounded"
-                    />
-                    <span className="text-sm font-medium text-slate-200">Enable Auto Follow-up</span>
-                  </label>
-                </div>
-                
-                {followupEnabled && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 mt-2 border-t border-slate-800">
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Wait Days</label>
-                      <input 
-                        type="number" 
-                        min="1"
-                        max="30"
-                        value={followupDays}
-                        onChange={(e) => setFollowupDays(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Follow-up Template <span className="text-red-400">*</span></label>
-                      <select
-                        value={followupTemplateId}
-                        onChange={(e) => setFollowupTemplateId(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                {/* AI Suggested Verifications Banner (if present) */}
+                {aiSuggestedDetails.length > 0 && (
+                  <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        Gemini Suggested Confirmations for this Draft:
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAiSuggestedDetails([])}
+                        className="text-[11px] text-amber-400 hover:text-amber-200 cursor-pointer font-medium"
                       >
-                        <option value="">-- Select Template --</option>
-                        {Array.isArray(templates) && templates.map(t => (
-                          <option key={t.id} value={t.id}>{t.name}</option>
-                        ))}
-                      </select>
+                        Dismiss
+                      </button>
                     </div>
+                    <ul className="text-[11px] text-amber-200/90 list-disc list-inside space-y-0.5">
+                      {aiSuggestedDetails.map((item, idx) => (
+                        <li key={idx}>{item}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
-              </div>
-            </>
-          ) : (
-            /* Live Preview Tab */
-            <div className="space-y-4">
-              {combinedRecipients.length > 0 && (
-                <div className="flex items-center justify-between bg-slate-900 p-3 rounded-xl border border-slate-800">
-                  <span className="text-xs text-slate-400">Previewing Recipient {previewIndex + 1} of {combinedRecipients.length}</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      disabled={previewIndex === 0}
-                      onClick={() => setPreviewIndex(prev => Math.max(0, prev - 1))}
-                      className="px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded text-white"
+
+                {/* Campaign Title & Subject */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Use Template (Optional)
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsAiDrawerOpen(true)}
+                        className="text-xs text-purple-400 hover:text-purple-300 font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Wand2 className="w-3 h-3" />
+                        Or Draft with AI
+                      </button>
+                    </div>
+                    <select
+                      value={selectedTemplateId}
+                      onChange={handleTemplateChange}
+                      className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 transition-colors"
                     >
-                      Previous
-                    </button>
-                    <button
-                      disabled={previewIndex >= combinedRecipients.length - 1}
-                      onClick={() => setPreviewIndex(prev => Math.min(combinedRecipients.length - 1, prev + 1))}
-                      className="px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded text-white"
-                    >
-                      Next
-                    </button>
+                      <option value="">-- Start from scratch or AI draft --</option>
+                      {templates.map(t => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                      Campaign Internal Label
+                    </label>
+                    <input
+                      type="text"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="e.g. Q3 Project Milestone Check-in"
+                      className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Email Subject Line <span className="text-red-400">*</span>
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={subject}
+                      onChange={(e) => handleSubjectChange(e.target.value)}
+                      placeholder="Action Required: Team Status & Deliverables"
+                      className="w-full bg-slate-900 border border-slate-700/70 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500 transition-colors"
+                    />
                   </div>
                 </div>
-              )}
 
-              {/* Email Envelope Container */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
-                <div className="border-b border-slate-800/80 pb-3 space-y-1.5 text-sm">
-                  <div className="flex"><span className="w-20 text-slate-500 font-medium">To:</span> <span className="text-slate-200 font-semibold">{selectedPreviewRecipient.name} &lt;{selectedPreviewRecipient.email}&gt;</span></div>
-                  <div className="flex"><span className="w-20 text-slate-500 font-medium">Subject:</span> <span className="text-sky-400 font-medium">{subject || '(No Subject)'}</span></div>
-                  {selectedPreviewRecipient.fromDept && (
-                    <div className="flex"><span className="w-20 text-slate-500 font-medium">Source:</span> <span className="text-indigo-400 text-xs font-medium">From Department</span></div>
+                {/* Department Selection */}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-xl overflow-hidden">
+                  <button
+                    onClick={() => setShowDeptSection(!showDeptSection)}
+                    className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-slate-800/50 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-indigo-400" />
+                      <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Send to Departments
+                      </span>
+                      {selectedDeptIds.length > 0 && (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">
+                          {selectedDeptIds.length} selected · {deptRecipients.length} participants
+                        </span>
+                      )}
+                    </div>
+                    {showDeptSection ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                  </button>
+
+                  {showDeptSection && (
+                    <div className="px-4 pb-4 border-t border-slate-800">
+                      {loadingDepts ? (
+                        <div className="py-4 text-center text-slate-500 text-sm">Loading departments...</div>
+                      ) : departments.length === 0 ? (
+                        <div className="py-4 text-center text-slate-500 text-sm">No active departments available. Create departments first.</div>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-between py-2">
+                            <span className="text-xs text-slate-400">Select departments to include their active participants as recipients</span>
+                            <button
+                              onClick={toggleAllDepts}
+                              className="text-xs text-sky-400 hover:text-sky-300 font-medium cursor-pointer"
+                            >
+                              {selectedDeptIds.length === departments.length ? 'Deselect All' : 'Select All'}
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {departments.map(dept => {
+                              const isSelected = selectedDeptIds.includes(dept.id);
+                              const pCount = (deptParticipants[dept.id] || []).length;
+                              return (
+                                <button
+                                  key={dept.id}
+                                  onClick={() => toggleDept(dept.id)}
+                                  className={`flex items-center justify-between p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-indigo-500/10 border-indigo-500/30 text-white'
+                                      : 'bg-slate-950/40 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-2.5">
+                                    <div className={`w-4 h-4 rounded border-2 flex items-center justify-center ${isSelected ? 'bg-indigo-500 border-indigo-500' : 'border-slate-600'}`}>
+                                      {isSelected && <CheckCircle2 className="w-3 h-3 text-white" />}
+                                    </div>
+                                    <div>
+                                      <div className="text-sm font-medium">{dept.name}</div>
+                                      {dept.description && <div className="text-[11px] text-slate-500">{dept.description}</div>}
+                                    </div>
+                                  </div>
+                                  <span className="text-xs text-slate-400 shrink-0 ml-2">{pCount} member{pCount !== 1 ? 's' : ''}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Department Recipients Preview */}
+                          {selectedDeptIds.length > 0 && deptRecipients.length > 0 && (
+                            <div className="mt-3 p-3 bg-slate-950/60 rounded-xl border border-slate-800/80">
+                              <div className="text-xs font-semibold text-indigo-400 mb-1.5">
+                                {deptRecipients.length} unique participant{deptRecipients.length !== 1 ? 's' : ''} from selected departments:
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto custom-scrollbar">
+                                {deptRecipients.map((r, i) => (
+                                  <span key={i} className="px-2 py-0.5 bg-slate-800 text-slate-300 text-[11px] rounded-lg">{r.name} &lt;{r.email}&gt;</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
-                
-                <div className="pt-2 text-slate-200 whitespace-pre-wrap text-sm leading-relaxed font-sans min-h-[140px]">
-                  {previewBody}
+
+                {/* Recipients Input Area */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                      <Users className="w-3.5 h-3.5 text-sky-400" />
+                      Manual Recipients ({manualRecipients.length} Detected)
+                    </label>
+                    <label className="text-xs text-sky-400 hover:text-sky-300 cursor-pointer flex items-center gap-1">
+                      <FileText className="w-3.5 h-3.5" />
+                      Import CSV/TXT
+                      <input type="file" accept=".csv,.txt" onChange={handleFileUpload} className="hidden" />
+                    </label>
+                  </div>
+                  <textarea
+                    rows={4}
+                    value={rawRecipients}
+                    onChange={(e) => {
+                      setRawRecipients(e.target.value);
+                      setIsPreviewReviewed(false);
+                    }}
+                    placeholder="Enter emails separated by comma or new lines, e.g. alex@company.com (Alex Rivera)"
+                    className="w-full bg-slate-900 border border-slate-700/70 rounded-xl p-3.5 text-sm text-slate-200 placeholder-slate-500 font-mono focus:outline-none focus:border-sky-500 transition-colors custom-scrollbar"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Supported formats: <code className="text-sky-400">email@example.com</code> or <code className="text-sky-400">email@example.com (Full Name)</code> or <code className="text-sky-400">Full Name &lt;email@example.com&gt;</code>
+                  </p>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-500">
-                  <div className="flex items-center gap-1.5 text-emerald-400">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Invisible 1x1 TAT tracking pixel will be automatically embedded.
+                {/* Combined Recipient Summary */}
+                {(selectedDeptIds.length > 0 && manualRecipients.length > 0) && (
+                  <div className="p-3.5 rounded-xl bg-sky-500/5 border border-sky-500/20 text-sm">
+                    <div className="flex items-center gap-2 text-sky-400 font-semibold text-xs mb-1">
+                      <Users className="w-3.5 h-3.5" />
+                      Combined Recipient Preview (deduplicated)
+                    </div>
+                    <div className="text-slate-300 text-xs">
+                      <span className="text-indigo-400 font-medium">{deptRecipients.length}</span> from departments +{' '}
+                      <span className="text-sky-400 font-medium">{combinedRecipients.length - deptRecipients.length}</span> manual ={' '}
+                      <span className="text-white font-bold">{combinedRecipients.length}</span> total unique recipients
+                    </div>
                   </div>
-                  <span>Header: X-MailTrack-ID</span>
+                )}
+
+                {/* Email Content Body */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Email Body Content <span className="text-red-400">*</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400">Insert Variable:</span>
+                      <button
+                        type="button"
+                        onClick={() => insertVariable('name')}
+                        className="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 rounded cursor-pointer"
+                      >
+                        + Name
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => insertVariable('email')}
+                        className="px-2 py-0.5 text-xs bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sky-300 rounded cursor-pointer"
+                      >
+                        + Email
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    rows={7}
+                    value={body}
+                    onChange={(e) => handleBodyChange(e.target.value)}
+                    className="w-full bg-slate-900 border border-slate-700/70 rounded-xl p-3.5 text-sm text-slate-100 placeholder-slate-500 font-sans focus:outline-none focus:border-sky-500 transition-colors custom-scrollbar leading-relaxed"
+                  />
+                </div>
+
+                {/* Scheduling Section */}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center gap-4 mb-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="schedule" 
+                        value="now" 
+                        checked={scheduleMode === 'now'}
+                        onChange={() => {
+                          setScheduleMode('now');
+                          setIsPreviewReviewed(false);
+                        }}
+                        className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700"
+                      />
+                      <span className="text-sm font-medium text-slate-200">Send Now</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="schedule" 
+                        value="later" 
+                        checked={scheduleMode === 'later'}
+                        onChange={() => {
+                          setScheduleMode('later');
+                          setIsPreviewReviewed(false);
+                        }}
+                        className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700"
+                      />
+                      <span className="text-sm font-medium text-slate-200">Schedule for Later</span>
+                    </label>
+                  </div>
+                  
+                  {scheduleMode === 'later' && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-slate-800">
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Date</label>
+                        <input 
+                          type="date" 
+                          value={scheduleDate}
+                          onChange={(e) => {
+                            setScheduleDate(e.target.value);
+                            setIsPreviewReviewed(false);
+                          }}
+                          className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Time</label>
+                        <input 
+                          type="time" 
+                          value={scheduleTime}
+                          onChange={(e) => {
+                            setScheduleTime(e.target.value);
+                            setIsPreviewReviewed(false);
+                          }}
+                          className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Timezone</label>
+                        <input 
+                          type="text"
+                          disabled
+                          value={scheduleTimezone}
+                          className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-slate-400 cursor-not-allowed"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Follow-up Section */}
+                <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={followupEnabled}
+                        onChange={(e) => {
+                          setFollowupEnabled(e.target.checked);
+                          setIsPreviewReviewed(false);
+                        }}
+                        className="text-sky-500 focus:ring-sky-500 bg-slate-800 border-slate-700 rounded"
+                      />
+                      <span className="text-sm font-medium text-slate-200">Enable Auto Follow-up</span>
+                    </label>
+                  </div>
+                  
+                  {followupEnabled && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 mt-2 border-t border-slate-800">
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Wait Days</label>
+                        <input 
+                          type="number" 
+                          min="1"
+                          max="30"
+                          value={followupDays}
+                          onChange={(e) => setFollowupDays(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Follow-up Template <span className="text-red-400">*</span></label>
+                        <select
+                          value={followupTemplateId}
+                          onChange={(e) => setFollowupTemplateId(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-sky-500"
+                        >
+                          <option value="">-- Select Template --</option>
+                          {Array.isArray(templates) && templates.map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              /* Live Preview Tab (Requirement 4) */
+              <div className="space-y-4">
+                
+                {/* Unresolved Placeholders Warning Banner */}
+                {unresolvedPlaceholders.length > 0 && (
+                  <div className="p-4 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-3 animate-fade-in">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-bold text-amber-300">
+                        Unresolved Placeholders Detected in Email
+                      </div>
+                      <div className="mt-1 text-amber-200/90 leading-relaxed">
+                        The email contains unverified placeholders:{' '}
+                        <span className="font-mono font-bold text-amber-100">
+                          {unresolvedPlaceholders.join(', ')}
+                        </span>
+                        . Switch back to the composer to replace them with actual values before sending.
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Dispatch Overview Box */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
+                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-sky-400" />
+                      Recipients
+                    </div>
+                    <div className="text-sm font-bold text-white">
+                      {combinedRecipients.length} Deduplicated
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {selectedDeptIds.length > 0 ? `${selectedDeptIds.length} dept(s)` : 'Direct list'}
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
+                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <UserCheck className="w-3.5 h-3.5 text-purple-400" />
+                      Sender Identity
+                    </div>
+                    <div className="text-sm font-bold text-white truncate" title={senderEmail || 'admin@groupmail.com'}>
+                      {senderEmail || 'admin@groupmail.com'}
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      MailPulse Account
+                    </div>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl">
+                    <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-emerald-400" />
+                      Dispatch Timing
+                    </div>
+                    <div className="text-sm font-bold text-white">
+                      {scheduleMode === 'now' ? 'Send Immediately' : `${scheduleDate || 'No date'} ${scheduleTime || ''}`}
+                    </div>
+                    <div className="text-[11px] text-slate-400 truncate">
+                      {scheduleMode === 'now' ? 'Fan-out upon confirmation' : scheduleTimezone}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recipient Personalization Switcher */}
+                {combinedRecipients.length > 0 && (
+                  <div className="flex items-center justify-between bg-slate-900 p-3 rounded-xl border border-slate-800">
+                    <span className="text-xs text-slate-400">
+                      Previewing Personalized Draft for Recipient{' '}
+                      <strong className="text-white">{previewIndex + 1}</strong> of{' '}
+                      <strong className="text-white">{combinedRecipients.length}</strong>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled={previewIndex === 0}
+                        onClick={() => setPreviewIndex(prev => Math.max(0, prev - 1))}
+                        className="px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded text-white cursor-pointer"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        disabled={previewIndex >= combinedRecipients.length - 1}
+                        onClick={() => setPreviewIndex(prev => Math.min(combinedRecipients.length - 1, prev + 1))}
+                        className="px-3 py-1 text-xs bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded text-white cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Email Envelope Container (Excludes tracking-pixel / internal metadata from preview) */}
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3 shadow-inner">
+                  <div className="border-b border-slate-800/80 pb-3 space-y-2 text-sm">
+                    <div className="flex">
+                      <span className="w-24 text-slate-500 font-medium">To:</span>
+                      <span className="text-slate-200 font-semibold">
+                        {selectedPreviewRecipient.name} &lt;{selectedPreviewRecipient.email}&gt;
+                      </span>
+                    </div>
+                    <div className="flex">
+                      <span className="w-24 text-slate-500 font-medium">From:</span>
+                      <span className="text-slate-300">
+                        {senderEmail || 'admin@groupmail.com'}
+                      </span>
+                    </div>
+                    <div className="flex">
+                      <span className="w-24 text-slate-500 font-medium">Subject:</span>
+                      <span className="text-sky-400 font-semibold">
+                        {previewSubject || <span className="text-red-400 font-normal italic">(No Subject Specified)</span>}
+                      </span>
+                    </div>
+                    {selectedPreviewRecipient.fromDept && (
+                      <div className="flex">
+                        <span className="w-24 text-slate-500 font-medium">Source:</span>
+                        <span className="text-indigo-400 text-xs font-medium">Included via Department Participant Roster</span>
+                      </div>
+                    )}
+                    {selectedDeptNames.length > 0 && (
+                      <div className="flex">
+                        <span className="w-24 text-slate-500 font-medium">Departments:</span>
+                        <span className="text-slate-400 text-xs">
+                          {selectedDeptNames.join(', ')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div className="pt-2 text-slate-100 whitespace-pre-wrap text-sm leading-relaxed font-sans min-h-[140px]">
+                    {previewBody || <span className="text-red-400 italic">(Empty Body)</span>}
+                  </div>
+
+                  <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-[11px] text-slate-500">
+                    <div className="flex items-center gap-1.5 text-emerald-400">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Individual recipient fan-out enabled with per-recipient TAT tracking.
+                    </div>
+                    <span className="text-slate-500">Human-readable preview</span>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Footer Actions */}
-        <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/60 flex items-center justify-between">
-          <div className="text-xs text-slate-400">
-            Sending to <span className="font-semibold text-white">{combinedRecipients.length}</span> individual recipients
-            {selectedDeptIds.length > 0 && (
-              <span className="text-indigo-400 ml-1">
-                ({selectedDeptIds.length} dept{selectedDeptIds.length !== 1 ? 's' : ''})
-              </span>
             )}
           </div>
 
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              disabled={isSending}
-              className="px-4 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSend}
-              disabled={isSending || combinedRecipients.length === 0}
-              className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl shadow-lg shadow-sky-500/20 transition-all cursor-pointer"
-            >
-              {isSending ? (
-                <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Fanning Out Emails...</span>
-                </>
+          {/* Footer Actions */}
+          <div className="px-6 py-4 border-t border-slate-800 bg-slate-900/60 flex items-center justify-between">
+            <div className="text-xs text-slate-400">
+              {activeTab === 'preview' ? (
+                <span className="text-emerald-400 font-medium flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Preview reviewed. Ready to confirm dispatch.
+                </span>
               ) : (
-                <>
-                  <Send className="w-4 h-4" />
-                  <span>{scheduleMode === 'later' ? 'Schedule Campaign' : 'Send Campaign Now'}</span>
-                </>
+                <span>
+                  Sending to <strong className="text-white">{combinedRecipients.length}</strong> unique recipients
+                  {selectedDeptIds.length > 0 && (
+                    <span className="text-indigo-400 ml-1">
+                      ({selectedDeptIds.length} dept{selectedDeptIds.length !== 1 ? 's' : ''})
+                    </span>
+                  )}
+                </span>
               )}
-            </button>
-          </div>
-        </div>
+            </div>
 
+            <div className="flex items-center gap-3">
+              {activeTab === 'preview' ? (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('compose')}
+                  className="px-4 py-2 text-sm text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Edit3 className="w-4 h-4" />
+                  Edit Draft
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => handleTabChange('preview')}
+                  className="px-4 py-2 text-sm text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 border border-sky-500/20 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  <Eye className="w-4 h-4" />
+                  Preview Email
+                </button>
+              )}
+
+              <button
+                onClick={onClose}
+                disabled={isSending}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={handleSend}
+                disabled={isSending || combinedRecipients.length === 0}
+                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 disabled:opacity-50 text-white text-sm font-semibold rounded-xl shadow-lg shadow-sky-500/20 transition-all cursor-pointer"
+              >
+                {isSending ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Fanning Out Emails...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    <span>
+                      {scheduleMode === 'later'
+                        ? isPreviewReviewed
+                          ? 'Confirm & Schedule Campaign'
+                          : 'Schedule Campaign'
+                        : isPreviewReviewed
+                        ? 'Confirm & Send Campaign Now'
+                        : 'Send Campaign Now'}
+                    </span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+        </div>
       </div>
-    </div>
+
+      {/* Gemini AI Email Assistant Drawer/Modal (Requirement 1, 2, 3) */}
+      <AiEmailAssistantDrawer
+        isOpen={isAiDrawerOpen}
+        onClose={() => setIsAiDrawerOpen(false)}
+        onApplyDraft={handleApplyAiDraft}
+        initialSubject={subject}
+        initialBody={body}
+        defaultSender={senderEmail}
+      />
+    </>
   );
 }
-

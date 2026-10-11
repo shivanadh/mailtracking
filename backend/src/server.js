@@ -7,6 +7,7 @@ const { sendCampaign } = require('./mailer');
 const { syncReplies, simulateReply, fetchRecipientReplyFromGmail } = require('./replyPoller');
 const departmentRoutes = require('./departmentRoutes');
 const templateRoutes = require('./templateRoutes');
+const { router: aiRoutes } = require('./aiRoutes');
 const { assignRecipient } = require('./assignmentEngine');
 const { startScheduler } = require('./schedulerWorker');
 
@@ -23,6 +24,9 @@ app.use(departmentRoutes);
 
 // Mount template routes
 app.use(templateRoutes);
+
+// Mount AI assistant routes
+app.use(aiRoutes);
 
 // 1x1 Transparent PNG Buffer
 const TRANSPARENT_PNG = Buffer.from(
