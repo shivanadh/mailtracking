@@ -4,7 +4,7 @@ import {
   Settings, RefreshCw, ChevronRight, Trash2, Shield, Users,
   PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer, ListFilter, Building2
 } from 'lucide-react';
-import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend, PieChart, Pie, Cell } from 'recharts';
 import RecipientLogsDrawer from './RecipientLogsDrawer';
 import TeamActionLogsDrawer from './TeamActionLogsDrawer';
 import { DepartmentBadge } from './DepartmentManager';
@@ -85,12 +85,16 @@ export default function Dashboard({
   ] : [];
 
   // Chart data formatting
-  const chartData = campaigns.slice(0, 10).reverse().map((c) => ({
-    name: c.subject.length > 15 ? c.subject.substring(0, 15) + '...' : c.subject,
-    Recipients: c.total_recipients,
-    Opened: c.opened_count,
-    Replied: c.replied_count
-  }));
+  const chartData = campaigns.slice(0, 10).reverse().map((c) => {
+    const subject = c.subject || 'Untitled';
+    return {
+      name: subject.length > 15 ? subject.substring(0, 15) + '...' : subject,
+      fullName: subject,
+      Recipients: Number(c.total_recipients) || 0,
+      Opened: Number(c.opened_count) || 0,
+      Replied: Number(c.replied_count) || 0
+    };
+  });
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -444,31 +448,74 @@ export default function Dashboard({
 
           <div className="h-64 w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorRecipients" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorOpened" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0284c7" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="#0284c7" stopOpacity={0}/>
-                  </linearGradient>
-                  <linearGradient id="colorReplied" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
-                <YAxis stroke="#64748b" fontSize={11} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: '#111827', borderColor: '#374151', borderRadius: '0.75rem', color: '#fff' }}
+              <BarChart 
+                data={chartData} 
+                margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                barGap={4}
+                maxBarSize={36}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                <XAxis 
+                  dataKey="name" 
+                  stroke="#64748b" 
+                  fontSize={11} 
+                  tickLine={false}
                 />
-                <Area type="monotone" dataKey="Recipients" stroke="#38bdf8" fillOpacity={1} fill="url(#colorRecipients)" />
-                <Area type="monotone" dataKey="Opened" stroke="#0284c7" fillOpacity={1} fill="url(#colorOpened)" />
-                <Area type="monotone" dataKey="Replied" stroke="#10b981" fillOpacity={1} fill="url(#colorReplied)" />
-              </AreaChart>
+                <YAxis 
+                  stroke="#64748b" 
+                  fontSize={11} 
+                  allowDecimals={false}
+                  domain={[0, 'auto']}
+                  tickLine={false}
+                />
+                <Tooltip 
+                  cursor={{ fill: 'rgba(255, 255, 255, 0.05)' }}
+                  contentStyle={{ 
+                    backgroundColor: '#111827', 
+                    borderColor: '#374151', 
+                    borderRadius: '0.75rem', 
+                    color: '#fff',
+                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)'
+                  }}
+                  labelStyle={{ color: '#fff', fontWeight: 600, marginBottom: '0.25rem' }}
+                  labelFormatter={(label, payload) => {
+                    if (payload && payload.length > 0 && payload[0]?.payload?.fullName) {
+                      return payload[0].payload.fullName;
+                    }
+                    return label;
+                  }}
+                />
+                <Legend 
+                  verticalAlign="top" 
+                  align="right" 
+                  iconType="circle"
+                  iconSize={8}
+                  wrapperStyle={{ paddingBottom: '12px', fontSize: '12px' }}
+                  formatter={(value) => (
+                    <span className="text-slate-300 font-medium text-xs ml-1 mr-3">
+                      {value}
+                    </span>
+                  )}
+                />
+                <Bar 
+                  dataKey="Recipients" 
+                  name="Recipients" 
+                  fill="#38bdf8" 
+                  radius={[4, 4, 0, 0]} 
+                />
+                <Bar 
+                  dataKey="Opened" 
+                  name="Opened" 
+                  fill="#3b82f6" 
+                  radius={[4, 4, 0, 0]} 
+                />
+                <Bar 
+                  dataKey="Replied" 
+                  name="Replied" 
+                  fill="#10b981" 
+                  radius={[4, 4, 0, 0]} 
+                />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
