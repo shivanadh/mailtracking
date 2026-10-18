@@ -10,6 +10,47 @@ import RecipientLogsDrawer from './RecipientLogsDrawer';
 import TeamActionLogsDrawer from './TeamActionLogsDrawer';
 import { DepartmentBadge } from './DepartmentManager';
 
+// Explicit light-text tooltip for the Actioned Ratio Donut Chart
+function DonutTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const item = payload[0];
+  const name = item.name || item.payload?.name || '';
+  const value = item.value ?? item.payload?.value ?? 0;
+  const color = item.payload?.color || (name === 'Actioned' ? '#10b981' : '#f59e0b');
+
+  return (
+    <div 
+      className="rounded-xl border border-slate-700 bg-slate-900/95 px-3.5 py-2 shadow-xl backdrop-blur-md select-none pointer-events-none"
+      style={{
+        backgroundColor: '#0f172a',
+        borderColor: '#334155',
+        borderRadius: '0.75rem',
+        boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)',
+        pointerEvents: 'none'
+      }}
+    >
+      <div className="flex items-center gap-1.5 text-xs">
+        <span 
+          className="w-2.5 h-2.5 rounded-full shrink-0" 
+          style={{ backgroundColor: color }} 
+        />
+        <span style={{ color: '#f8fafc' }} className="font-semibold">
+          {name}
+        </span>
+        <span style={{ color: '#f8fafc' }} className="font-medium">
+          :
+        </span>
+        <span style={{ color: '#f8fafc' }} className="font-semibold">
+          {value} {value === 1 ? 'recipient' : 'recipients'}
+        </span>
+      </div>
+      <div style={{ color: '#cbd5e1' }} className="text-[11px] mt-0.5 pl-4">
+        (Click to view logs)
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard({ 
   campaigns, 
   loading, 
@@ -285,8 +326,17 @@ export default function Dashboard({
                       ))}
                     </Pie>
                     <Tooltip 
-                      contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '0.75rem', color: '#fff', fontSize: '12px' }}
-                      formatter={(value, name) => [`${value} recipients (Click to view logs)`, name]}
+                      wrapperStyle={{ pointerEvents: 'none', outline: 'none' }}
+                      contentStyle={{ 
+                        backgroundColor: '#0f172a', 
+                        borderColor: '#334155', 
+                        borderRadius: '0.75rem', 
+                        color: '#f8fafc', 
+                        fontSize: '12px' 
+                      }}
+                      itemStyle={{ color: '#f8fafc', fontSize: '12px' }}
+                      labelStyle={{ color: '#f8fafc', fontWeight: 600 }}
+                      content={<DonutTooltip />}
                     />
                   </PieChart>
                 </ResponsiveContainer>
