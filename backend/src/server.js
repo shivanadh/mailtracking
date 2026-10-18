@@ -16,7 +16,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(cors({
+  exposedHeaders: ['Content-Disposition']
+}));
 app.use(express.json());
 
 // Mount department management routes
@@ -51,6 +53,24 @@ function formatTAT(seconds) {
   const days = Math.floor(hours / 24);
   const remHours = hours % 24;
   return `${days}d ${remHours}h`;
+}
+
+// Sanitize spreadsheet cells against CSV / formula injection (=, +, -, @, \t, \r)
+function sanitizeSpreadsheetCell(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== 'string') return value;
+  if (/^[=+\-@\t\r]/.test(value)) {
+    return `'${value}`;
+  }
+  return value;
+}
+
+function sanitizeSpreadsheetObject(obj) {
+  const sanitized = {};
+  for (const [key, val] of Object.entries(obj)) {
+    sanitized[sanitizeSpreadsheetCell(key)] = sanitizeSpreadsheetCell(val);
+  }
+  return sanitized;
 }
 
 // -------------------------------------------------------------
@@ -263,6 +283,74 @@ app.get('/api/campaigns', async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------
+// DASHBOARD ALL-CAMPAIGNS EXPORT ENDPOINT (CSV / XLSX)
+// -------------------------------------------------------------
+app.get('/api/campaigns/export', async (req, res) => {
+  try {
+    const db = await getDb();
+    const format = (req.query.format || 'xlsx').toLowerCase();
+    const xlsx = require('xlsx');
+
+    const campaigns = await db.all(`
+      SELECT c.*,
+        COUNT(r.id) as total_recipients,
+        SUM(CASE WHEN r.first_opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened_count,
+        SUM(CASE WHEN r.status = 'REPLIED' THEN 1 ELSE 0 END) as replied_count,
+        AVG(r.tat_open_seconds) as avg_tat_open_seconds,
+        AVG(r.tat_reply_seconds) as avg_tat_reply_seconds
+      FROM campaigns c
+      LEFT JOIN recipients r ON c.id = r.campaign_id
+      GROUP BY c.id
+      ORDER BY c.id DESC
+    `);
+
+    const rows = campaigns.map(c => {
+      const openRate = c.total_recipients ? Math.round(((c.opened_count || 0) / c.total_recipients) * 100) : 0;
+      const replyRate = c.total_recipients ? Math.round(((c.replied_count || 0) / c.total_recipients) * 100) : 0;
+      return {
+        'Campaign ID': c.id,
+        'Label / Title': c.title || 'N/A',
+        'Subject': c.subject || 'N/A',
+        'Status': c.campaign_status || 'N/A',
+        'Total Recipients': c.total_recipients || 0,
+        'Tracked Opens': c.opened_count || 0,
+        'Tracked Open Rate (%)': `${openRate}%`,
+        'Total Replies': c.replied_count || 0,
+        'Reply Rate (%)': `${replyRate}%`,
+        'Avg Open TAT': formatTAT(c.avg_tat_open_seconds ? Math.round(c.avg_tat_open_seconds) : null),
+        'Avg Reply TAT': formatTAT(c.avg_tat_reply_seconds ? Math.round(c.avg_tat_reply_seconds) : null),
+        'Sent At': c.sent_at || 'Not sent yet',
+        'Scheduled At': c.schedule_at || 'N/A'
+      };
+    });
+
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+
+    const sanitizedRows = rows.map(r => sanitizeSpreadsheetObject(r));
+    const sheetData = sanitizedRows.length ? sanitizedRows : [{ Note: 'No campaigns found' }];
+
+    if (format === 'csv') {
+      const ws = xlsx.utils.json_to_sheet(sheetData);
+      const csvContent = xlsx.utils.sheet_to_csv(ws);
+      res.setHeader('Content-Disposition', 'attachment; filename="mailpulse_all_campaigns_summary.csv"');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      return res.send(csvContent);
+    }
+
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.json_to_sheet(sheetData);
+    xlsx.utils.book_append_sheet(wb, ws, 'Campaigns Summary');
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Disposition', 'attachment; filename="mailpulse_all_campaigns_summary.xlsx"');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/campaigns/:id', async (req, res) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
@@ -380,48 +468,78 @@ app.put('/api/campaigns/:id/status', async (req, res) => {
 app.get('/api/campaigns/:id/export', async (req, res) => {
   try {
     const campaignId = parseInt(req.params.id, 10);
+    const format = (req.query.format || 'xlsx').toLowerCase();
+    const statusFilter = req.query.status ? req.query.status.toUpperCase() : 'ALL';
+
     const db = await getDb();
     const campaign = await db.get('SELECT * FROM campaigns WHERE id = ?', [campaignId]);
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
     
-    const recipients = await db.all('SELECT * FROM recipients WHERE campaign_id = ?', [campaignId]);
+    let recipients = await db.all('SELECT * FROM recipients WHERE campaign_id = ? ORDER BY id ASC', [campaignId]);
     
+    if (statusFilter !== 'ALL') {
+      if (statusFilter === 'OPENED') {
+        recipients = recipients.filter(r => r.first_opened_at !== null || (r.open_count && r.open_count > 0) || r.status === 'OPENED');
+      } else if (statusFilter === 'REPLIED') {
+        recipients = recipients.filter(r => r.status === 'REPLIED' || r.first_replied_at !== null || (r.reply_count && r.reply_count > 0));
+      } else if (statusFilter === 'SENT') {
+        recipients = recipients.filter(r => r.status === 'SENT' || (r.sent_at !== null && r.status !== 'SCHEDULED' && r.status !== 'FAILED'));
+      } else {
+        recipients = recipients.filter(r => r.status === statusFilter);
+      }
+    }
+
     const xlsx = require('xlsx');
     const wb = xlsx.utils.book_new();
     
     // Summary Sheet
     const summaryData = [
-      ['Campaign Subject', campaign.subject],
-      ['Label', campaign.title],
-      ['Status', campaign.campaign_status],
-      ['Total Recipients', campaign.total_recipients],
-      ['Sent Date', campaign.sent_at || 'N/A'],
+      ['Campaign Subject', campaign.subject || 'N/A'],
+      ['Label', campaign.title || 'N/A'],
+      ['Status', campaign.campaign_status || 'N/A'],
+      ['Total Recipients in Campaign', campaign.total_recipients || recipients.length],
+      ['Filter Applied', statusFilter],
+      ['Exported Recipients Count', recipients.length],
+      ['Sent Date', campaign.sent_at || 'Not sent yet'],
       ['Scheduled Date', campaign.schedule_at || 'N/A']
     ];
-    const wsSummary = xlsx.utils.aoa_to_sheet(summaryData);
+    const sanitizedSummary = summaryData.map(row => row.map(cell => sanitizeSpreadsheetCell(cell)));
+    const wsSummary = xlsx.utils.aoa_to_sheet(sanitizedSummary);
     xlsx.utils.book_append_sheet(wb, wsSummary, 'Summary');
     
     // Recipients Sheet
     const recipientsData = recipients.map(r => ({
-      'Name': r.name,
+      'Name': r.name || 'Recipient',
       'Email': r.email,
       'Status': r.status,
-      'Send Status': r.send_status,
-      'Sent At': r.sent_at || 'N/A',
-      'First Opened At': r.first_opened_at || 'N/A',
-      'Open Count': r.open_count,
-      'TAT Open (s)': r.tat_open_seconds || 'N/A',
-      'First Replied At': r.first_replied_at || 'N/A',
-      'Reply Count': r.reply_count,
-      'TAT Reply (s)': r.tat_reply_seconds || 'N/A',
-      'Follow-up Status': r.followup_status
+      'Send Status': r.send_status || 'N/A',
+      'Sent At': r.sent_at || 'Not sent yet',
+      'First Tracked Open': r.first_opened_at || 'No tracked open',
+      'Tracked Open Count': r.open_count ?? 0,
+      'TAT Open': formatTAT(r.tat_open_seconds),
+      'First Replied At': r.first_replied_at || 'No reply yet',
+      'Reply Count': r.reply_count ?? 0,
+      'TAT Reply': formatTAT(r.tat_reply_seconds),
+      'Reply Snippet': r.reply_snippet || '',
+      'Follow-up Status': r.followup_status || 'N/A'
     }));
-    const wsRecipients = xlsx.utils.json_to_sheet(recipientsData);
+    
+    const sanitizedRecipients = recipientsData.map(r => sanitizeSpreadsheetObject(r));
+    const wsRecipients = xlsx.utils.json_to_sheet(sanitizedRecipients.length ? sanitizedRecipients : [{ Note: 'No recipients matching filter' }]);
     xlsx.utils.book_append_sheet(wb, wsRecipients, 'Recipients');
     
-    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const filterSuffix = statusFilter !== 'ALL' ? `_${statusFilter.toLowerCase()}` : '';
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+
+    if (format === 'csv') {
+      const csvContent = xlsx.utils.sheet_to_csv(wsRecipients);
+      res.setHeader('Content-Disposition', `attachment; filename="campaign_${campaignId}_report${filterSuffix}.csv"`);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      return res.send(csvContent);
+    }
     
-    res.setHeader('Content-Disposition', `attachment; filename="campaign_${campaignId}_report.xlsx"`);
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', `attachment; filename="campaign_${campaignId}_report${filterSuffix}.xlsx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buffer);
   } catch (err) {

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   ArrowLeft, RefreshCw, Eye, MessageSquare, Clock, CheckCircle2, 
-  Mail, History, Globe, Shield, Sparkles, Filter, Trash2, ChevronRight, AlertTriangle, Zap 
+  Mail, History, Globe, Shield, Sparkles, Filter, Trash2, ChevronRight, AlertTriangle, Zap,
+  Download, FileSpreadsheet, XCircle
 } from 'lucide-react';
 import ReplyDrawer from './ReplyDrawer';
 import { DepartmentBadge, AssignmentBadge } from './DepartmentManager';
@@ -26,6 +27,11 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState('ALL');
+  
+  // Export states
+  const [exporting, setExporting] = useState(null); // 'xlsx' | 'csv' | null
+  const [exportError, setExportError] = useState(null);
+  const [exportSuccess, setExportSuccess] = useState(null);
   
   // Modals state
   const [timelineRecipient, setTimelineRecipient] = useState(null); // recipient object or null
@@ -76,8 +82,59 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
     }
   };
 
-  const handleExport = () => {
-    window.open(`/api/campaigns/${campaignId}/export`, '_blank');
+  const handleExport = async (format = 'xlsx') => {
+    if (exporting) return;
+    setExporting(format);
+    setExportError(null);
+    setExportSuccess(null);
+
+    try {
+      const queryParams = new URLSearchParams({
+        format,
+        status: statusFilter
+      });
+      const res = await fetch(`/api/campaigns/${campaignId}/export?${queryParams.toString()}`);
+      if (!res.ok) {
+        let errMsg = `Export failed (HTTP ${res.status})`;
+        try {
+          const errData = await res.json();
+          if (errData && errData.error) errMsg = errData.error;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      // Read Content-Disposition filename if available
+      let filename = `campaign_${campaignId}_report${statusFilter !== 'ALL' ? `_${statusFilter.toLowerCase()}` : ''}.${format}`;
+      const disposition = res.headers.get('content-disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename=["']?([^"';]+)["']?/i);
+        if (match && match[1]) {
+          filename = match[1].trim();
+        }
+      }
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(blobUrl);
+      }, 200);
+
+      setExportSuccess(`Report downloaded: ${filename}`);
+      setTimeout(() => setExportSuccess(null), 4000);
+    } catch (err) {
+      console.error('Export report error:', err);
+      setExportError(err.message || 'Failed to download report. Please check server availability.');
+    } finally {
+      setExporting(null);
+    }
   };
 
   const handleUpdateStatus = async (status) => {
@@ -141,6 +198,15 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
   const recipients = Array.isArray(data?.recipients) ? data.recipients : [];
   const filteredRecipients = recipients.filter(r => {
     if (statusFilter === 'ALL') return true;
+    if (statusFilter === 'OPENED') {
+      return r.first_opened_at !== null || (r.open_count && r.open_count > 0) || r.status === 'OPENED';
+    }
+    if (statusFilter === 'REPLIED') {
+      return r.status === 'REPLIED' || r.first_replied_at !== null || (r.reply_count && r.reply_count > 0);
+    }
+    if (statusFilter === 'SENT') {
+      return r.status === 'SENT' || (r.sent_at !== null && r.status !== 'SCHEDULED' && r.status !== 'FAILED');
+    }
     return r.status === statusFilter;
   });
 
@@ -187,14 +253,27 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
             <span>Sync Gmail Replies</span>
           </button>
 
-          <button
-            onClick={handleExport}
-            className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-sm font-medium transition-all cursor-pointer"
-            title="Download Campaign Report"
-          >
-            <History className="w-4 h-4" /> {/* Or Download icon */}
-            <span>Export Report</span>
-          </button>
+          <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-1">
+            <button
+              onClick={() => handleExport('xlsx')}
+              disabled={!!exporting}
+              className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+              title={`Download ${statusFilter !== 'ALL' ? statusFilter : 'all'} recipients report as Excel (.xlsx)`}
+            >
+              <Download className={`w-3.5 h-3.5 ${exporting === 'xlsx' ? 'animate-bounce' : ''}`} />
+              <span>{exporting === 'xlsx' ? 'Exporting...' : 'Export XLSX'}</span>
+            </button>
+            <span className="text-emerald-500/30">|</span>
+            <button
+              onClick={() => handleExport('csv')}
+              disabled={!!exporting}
+              className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-emerald-500/20 text-emerald-400 rounded-lg text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+              title={`Download ${statusFilter !== 'ALL' ? statusFilter : 'all'} recipients report as CSV (.csv)`}
+            >
+              <FileSpreadsheet className={`w-3.5 h-3.5 ${exporting === 'csv' ? 'animate-bounce' : ''}`} />
+              <span>{exporting === 'csv' ? 'Exporting...' : 'Export CSV'}</span>
+            </button>
+          </div>
 
           <button
             onClick={() => onDeleteCampaign(data.id)}
@@ -205,6 +284,30 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
           </button>
         </div>
       </div>
+
+      {/* Export Notifications */}
+      {exportError && (
+        <div className="flex items-center justify-between p-3.5 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{exportError}</span>
+          </div>
+          <button onClick={() => setExportError(null)} className="text-red-400 hover:text-red-300">
+            <XCircle className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+      {exportSuccess && (
+        <div className="flex items-center justify-between p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-xs">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{exportSuccess}</span>
+          </div>
+          <button onClick={() => setExportSuccess(null)} className="text-emerald-400 hover:text-emerald-300">
+            <XCircle className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Campaign Overview Banner */}
       <div className="glass-panel rounded-2xl p-6 relative overflow-hidden">

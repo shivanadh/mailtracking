@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { 
   Plus, Mail, Eye, MessageSquare, Clock, Zap, BarChart2, TrendingUp, 
   Settings, RefreshCw, ChevronRight, Trash2, Shield, Users,
-  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer, ListFilter, Building2
+  PieChart as PieChartIcon, CheckCircle2, ShieldCheck, BarChart3, Timer, ListFilter, Building2,
+  Download, FileSpreadsheet, AlertTriangle, XCircle
 } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend, PieChart, Pie, Cell } from 'recharts';
 import RecipientLogsDrawer from './RecipientLogsDrawer';
@@ -20,6 +21,11 @@ export default function Dashboard({
 }) {
   const [syncing, setSyncing] = useState(false);
   const [teamStats, setTeamStats] = useState(null);
+  
+  // Export state
+  const [exporting, setExporting] = useState(null); // 'xlsx' | 'csv' | null
+  const [exportError, setExportError] = useState(null);
+  const [exportSuccess, setExportSuccess] = useState(null);
   
   // Drawer modal state for Actioned vs Pending recipient logs
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -66,6 +72,56 @@ export default function Dashboard({
       console.error(e);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const handleExportDashboard = async (format = 'xlsx') => {
+    if (exporting) return;
+    setExporting(format);
+    setExportError(null);
+    setExportSuccess(null);
+
+    try {
+      const res = await fetch(`/api/campaigns/export?format=${format}`);
+      if (!res.ok) {
+        let errMsg = `Export failed (HTTP ${res.status})`;
+        try {
+          const errData = await res.json();
+          if (errData && errData.error) errMsg = errData.error;
+        } catch (_) {}
+        throw new Error(errMsg);
+      }
+
+      let filename = `mailpulse_all_campaigns_summary.${format}`;
+      const disposition = res.headers.get('content-disposition');
+      if (disposition && disposition.includes('filename=')) {
+        const match = disposition.match(/filename=["']?([^"';]+)["']?/i);
+        if (match && match[1]) {
+          filename = match[1].trim();
+        }
+      }
+
+      const blob = await res.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(blobUrl);
+      }, 200);
+
+      setExportSuccess(`Summary downloaded: ${filename}`);
+      setTimeout(() => setExportSuccess(null), 4000);
+    } catch (err) {
+      console.error('Export dashboard error:', err);
+      setExportError(err.message || 'Failed to export campaigns summary.');
+    } finally {
+      setExporting(null);
     }
   };
 
@@ -523,12 +579,56 @@ export default function Dashboard({
 
       {/* Campaigns List Table Container */}
       <div className="glass-panel rounded-2xl border border-slate-800 overflow-hidden">
-        <div className="flex items-center justify-between p-5 border-b border-slate-800/80 bg-slate-900/40">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5 border-b border-slate-800/80 bg-slate-900/40">
           <div>
             <h3 className="text-base font-semibold text-white">Group Mail Campaigns</h3>
             <p className="text-xs text-slate-400">Select a campaign to inspect individual recipient TAT and live tracking logs</p>
           </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleExportDashboard('xlsx')}
+              disabled={!!exporting || campaigns.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+              title="Download all campaigns summary to Excel (.xlsx)"
+            >
+              <Download className={`w-3.5 h-3.5 ${exporting === 'xlsx' ? 'animate-bounce' : ''}`} />
+              <span>{exporting === 'xlsx' ? 'Exporting...' : 'Export All (XLSX)'}</span>
+            </button>
+            <button
+              onClick={() => handleExportDashboard('csv')}
+              disabled={!!exporting || campaigns.length === 0}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-xs font-semibold transition-all disabled:opacity-50 cursor-pointer"
+              title="Download all campaigns summary to CSV (.csv)"
+            >
+              <FileSpreadsheet className={`w-3.5 h-3.5 ${exporting === 'csv' ? 'animate-bounce' : ''}`} />
+              <span>{exporting === 'csv' ? 'Exporting...' : 'Export All (CSV)'}</span>
+            </button>
+          </div>
         </div>
+
+        {/* Export Notification Banners */}
+        {exportError && (
+          <div className="flex items-center justify-between p-3.5 bg-red-500/10 border-b border-red-500/30 text-red-400 text-xs">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{exportError}</span>
+            </div>
+            <button onClick={() => setExportError(null)} className="text-red-400 hover:text-red-300">
+              <XCircle className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+        {exportSuccess && (
+          <div className="flex items-center justify-between p-3.5 bg-emerald-500/10 border-b border-emerald-500/30 text-emerald-400 text-xs">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{exportSuccess}</span>
+            </div>
+            <button onClick={() => setExportSuccess(null)} className="text-emerald-400 hover:text-emerald-300">
+              <XCircle className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-left text-sm text-slate-300">
