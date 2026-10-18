@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, ShieldCheck, Key, Globe, CheckCircle2, AlertCircle, ExternalLink, Zap, Copy, Check } from 'lucide-react';
+import { X, ShieldCheck, Key, CheckCircle2, AlertCircle, ExternalLink, Copy, Check } from 'lucide-react';
 
 export default function SettingsModal({ isOpen, onClose }) {
   const defaultCallback = 'https://mailtracking-backend.onrender.com/api/auth/google/callback';
@@ -7,7 +7,6 @@ export default function SettingsModal({ isOpen, onClose }) {
   const [clientSecret, setClientSecret] = useState('');
   const [redirectUri, setRedirectUri] = useState(defaultCallback);
   const [copied, setCopied] = useState(false);
-  const [mode, setMode] = useState('simulation');
   const [status, setStatus] = useState(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState(null);
@@ -24,7 +23,6 @@ export default function SettingsModal({ isOpen, onClose }) {
       const data = await res.json();
       setClientId(data.clientId || '');
       setRedirectUri(data.redirectUri || defaultCallback);
-      setMode(data.mode || 'simulation');
       setStatus(data);
     } catch (err) {
       console.error('Failed fetching settings:', err);
@@ -38,7 +36,7 @@ export default function SettingsModal({ isOpen, onClose }) {
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientId, clientSecret, redirectUri, mode })
+        body: JSON.stringify({ clientId, clientSecret, redirectUri })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed saving settings');
@@ -83,7 +81,7 @@ export default function SettingsModal({ isOpen, onClose }) {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-white">Google Mail API & Tracking Settings</h2>
-              <p className="text-xs text-slate-400">Configure real Gmail OAuth2 credentials or instant Simulation mode</p>
+              <p className="text-xs text-slate-400">Configure real Gmail OAuth2 credentials for email sending & reply tracking</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 text-slate-400 hover:text-white rounded-lg">
@@ -105,50 +103,6 @@ export default function SettingsModal({ isOpen, onClose }) {
             </div>
           )}
 
-          {/* Operation Mode Selector */}
-          <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-            <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Active Sending Mode
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setMode('simulation')}
-                className={`p-3.5 rounded-xl text-left border transition-all ${
-                  mode === 'simulation'
-                    ? 'bg-sky-500/10 border-sky-500/40 text-white'
-                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <div className="flex items-center justify-between font-semibold text-sm">
-                  <span>Simulation Mode</span>
-                  <Zap className="w-4 h-4 text-sky-400" />
-                </div>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Instant zero-config testing. Mocks Gmail delivery so you can simulate opens, replies, & TAT.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setMode('oauth')}
-                className={`p-3.5 rounded-xl text-left border transition-all ${
-                  mode === 'oauth'
-                    ? 'bg-sky-500/10 border-sky-500/40 text-white'
-                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <div className="flex items-center justify-between font-semibold text-sm">
-                  <span>Real Gmail API (OAuth2)</span>
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                </div>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Uses Google Workspace / Gmail API to send real emails to recipient inboxes.
-                </p>
-              </button>
-            </div>
-          </div>
-
           {/* Connection Status Box */}
           <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex items-center justify-between">
             <div className="space-y-0.5">
@@ -159,7 +113,7 @@ export default function SettingsModal({ isOpen, onClose }) {
                 </div>
               ) : (
                 <div className="text-sm font-semibold text-amber-400 flex items-center gap-1.5">
-                  <AlertCircle className="w-4 h-4" /> Not Connected (Using Simulation Mode)
+                  <AlertCircle className="w-4 h-4" /> Not Connected — Connect Gmail to send emails
                 </div>
               )}
             </div>

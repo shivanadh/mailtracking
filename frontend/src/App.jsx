@@ -6,7 +6,7 @@ import SettingsModal from './components/SettingsModal';
 import DepartmentManager from './components/DepartmentManager';
 import TemplateManager from './components/TemplateManager';
 import ErrorBoundary from './components/ErrorBoundary';
-import { Mail, ShieldCheck, Zap, Layers, RefreshCw, Building2, FileText } from 'lucide-react';
+import { Mail, ShieldCheck, Layers, RefreshCw, Building2, FileText } from 'lucide-react';
 
 export default function App() {
   const [campaigns, setCampaigns] = useState([]);
@@ -106,18 +106,19 @@ export default function App() {
               <div 
                 onClick={() => setIsSettingsOpen(true)}
                 className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs font-medium cursor-pointer hover:border-slate-700 transition-colors"
+                title={appSettings.isConnected ? `Connected as ${appSettings.userEmail}` : 'Gmail is disconnected. Click to open Settings.'}
               >
-                {appSettings.mode === 'oauth' && appSettings.isConnected ? (
+                {appSettings.isConnected ? (
                   <>
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-emerald-400 font-semibold">Gmail API Active</span>
-                    <span className="text-slate-500">({appSettings.userEmail})</span>
+                    <span className="text-emerald-400 font-semibold">Gmail Connected</span>
+                    <span className="text-slate-400">({appSettings.userEmail})</span>
                   </>
                 ) : (
                   <>
-                    <Zap className="w-3.5 h-3.5 text-sky-400" />
-                    <span className="text-sky-300 font-semibold">Simulation Mode</span>
-                    <span className="text-slate-500">(Instant Testing)</span>
+                    <span className="w-2 h-2 rounded-full bg-amber-400" />
+                    <span className="text-amber-300 font-semibold">Gmail Disconnected</span>
+                    <span className="text-slate-500">(Connect in Settings)</span>
                   </>
                 )}
               </div>
@@ -173,14 +174,16 @@ export default function App() {
             />
           </ErrorBoundary>
         ) : selectedCampaignId ? (
-          <CampaignDetail
-            campaignId={selectedCampaignId}
-            onBack={() => {
-              setSelectedCampaignId(null);
-              fetchCampaigns();
-            }}
-            onDeleteCampaign={handleDeleteCampaign}
-          />
+          <ErrorBoundary>
+            <CampaignDetail
+              campaignId={selectedCampaignId}
+              onBack={() => {
+                setSelectedCampaignId(null);
+                fetchCampaigns();
+              }}
+              onDeleteCampaign={handleDeleteCampaign}
+            />
+          </ErrorBoundary>
         ) : (
           <Dashboard
             campaigns={campaigns}

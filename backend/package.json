@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node tests/aiAssistant.test.js"
+    "test": "node tests/aiAssistant.test.js && node tests/openTracking.test.js"
   },
   "dependencies": {
     "@google/genai": "^2.28.0",

@@ -2,9 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const { getDb } = require('./db');
-const { getSettings, saveSettings, generateAuthUrl, handleAuthCallback } = require('./googleAuth');
-const { sendCampaign } = require('./mailer');
-const { syncReplies, simulateReply, fetchRecipientReplyFromGmail } = require('./replyPoller');
+const { getSettings, saveSettings, generateAuthUrl, handleAuthCallback, checkGmailConnection } = require('./googleAuth');
+const { sendCampaign, getTestMockGmailClient } = require('./mailer');
+const { syncReplies, fetchRecipientReplyFromGmail } = require('./replyPoller');
 const departmentRoutes = require('./departmentRoutes');
 const templateRoutes = require('./templateRoutes');
 const { router: aiRoutes } = require('./aiRoutes');
@@ -85,8 +85,16 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
     const purposeHeader = (req.headers['purpose'] || req.headers['sec-purpose'] || '').toLowerCase();
     const isPrefetch = purposeHeader.includes('prefetch');
     
-    // Detect suspected automated requests / proxy crawlers with reasonable evidence
-    const isSuspectedAutomated = /GoogleImageProxy|YahooMailProxy|bot|crawler|spider|curl|wget|scanner|probe|headless|barracuda|proofpoint|mimecast/i.test(userAgent) || isPrefetch;
+    // Distinguish privacy/caching proxies from suspected automated scanners
+    const isGoogleProxy = /GoogleImageProxy/i.test(userAgent);
+    const isOtherProxy = /YahooMailProxy/i.test(userAgent);
+    const proxyLabel = isGoogleProxy 
+      ? 'Google image proxy — human open unverified' 
+      : (isOtherProxy ? 'Yahoo Mail proxy — human open unverified' : null);
+
+    // Suspected automation requires explicit evidence (prefetch header or scanner/bot signatures)
+    const hasScannerSignature = /bot|crawler|spider|curl|wget|scanner|probe|headless|barracuda|proofpoint|mimecast/i.test(userAgent);
+    const isSuspectedAutomated = isPrefetch || hasScannerSignature;
 
     const now = new Date().toISOString();
     const nowMs = Date.now();
@@ -119,10 +127,15 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
     const logDetails = {
       isFirstOpen,
       totalOpens: recipient.open_count + 1,
+      isProxy: Boolean(isGoogleProxy || isOtherProxy),
+      isGoogleProxy: Boolean(isGoogleProxy),
+      proxyLabel: proxyLabel || undefined,
       isSuspectedAutomated: Boolean(isSuspectedAutomated)
     };
     if (isSuspectedAutomated) {
-      logDetails.automationEvidence = isPrefetch ? 'Prefetch request header detected' : `Suspected automated User-Agent: ${userAgent}`;
+      logDetails.automationEvidence = isPrefetch 
+        ? 'Prefetch request header detected' 
+        : `Scanner/bot signature detected: ${userAgent}`;
     }
 
     await db.run(
@@ -144,6 +157,14 @@ app.post('/api/campaigns', async (req, res) => {
 
     if (!subject || !body) {
       return res.status(400).json({ error: 'Subject and body are required.' });
+    }
+
+    // Validate Gmail connectivity before accepting Send Now or Schedule Later
+    const conn = await checkGmailConnection();
+    if (!conn.connected && !getTestMockGmailClient()) {
+      return res.status(400).json({
+        error: conn.reason || 'Gmail account is not connected. Please connect your Gmail account in Settings before dispatching or scheduling campaigns.'
+      });
     }
 
     // Build combined recipient list from manual + department participants
@@ -207,7 +228,7 @@ app.get('/api/campaigns', async (req, res) => {
     const campaigns = await db.all(`
       SELECT c.*,
         COUNT(r.id) as total_recipients,
-        SUM(CASE WHEN (r.open_count > 0 OR r.first_opened_at IS NOT NULL) THEN 1 ELSE 0 END) as opened_count,
+        SUM(CASE WHEN r.first_opened_at IS NOT NULL THEN 1 ELSE 0 END) as opened_count,
         SUM(CASE WHEN r.status = 'REPLIED' THEN 1 ELSE 0 END) as replied_count,
         AVG(r.tat_open_seconds) as avg_tat_open_seconds,
         AVG(r.tat_reply_seconds) as avg_tat_reply_seconds
@@ -288,8 +309,8 @@ app.get('/api/campaigns/:id', async (req, res) => {
       });
     }
 
-    // Campaign metrics: count only recipients with verified tracked opens
-    const openedCount = recipients.filter(r => (r.open_count > 0 || r.first_opened_at !== null)).length;
+    // Campaign metrics: count only recipients with verified tracked opens (first_opened_at evidence)
+    const openedCount = recipients.filter(r => Boolean(r.first_opened_at)).length;
     const repliedCount = recipients.filter(r => r.status === 'REPLIED').length;
 
     const openTats = recipients.filter(r => r.tat_open_seconds !== null).map(r => r.tat_open_seconds);
@@ -905,64 +926,19 @@ app.get('/api/recipients/:id/logs', async (req, res) => {
   }
 });
 
-app.post('/api/simulate/open', async (req, res) => {
-  try {
-    const { recipientId, minutesDelay } = req.body;
-    const db = await getDb();
-    const recipient = await db.get('SELECT * FROM recipients WHERE id = ?', [recipientId]);
-    if (!recipient) return res.status(404).json({ error: 'Recipient not found' });
-
-    const sentMs = new Date(recipient.sent_at).getTime();
-    let openMs = Date.now();
-    if (typeof minutesDelay === 'number' && !isNaN(minutesDelay)) {
-      openMs = sentMs + Math.max(0, minutesDelay * 60 * 1000);
-    }
-
-    const openTime = new Date(openMs).toISOString();
-    const tatOpenSeconds = Math.max(0, Math.floor((openMs - sentMs) / 1000));
-    const newStatus = recipient.status === 'SENT' ? 'OPENED' : recipient.status;
-
-    await db.run(
-      `UPDATE recipients 
-       SET status = ?,
-           first_opened_at = COALESCE(first_opened_at, ?),
-           last_opened_at = ?,
-           open_count = open_count + 1,
-           tat_open_seconds = COALESCE(tat_open_seconds, ?)
-       WHERE id = ?`,
-      [newStatus, openTime, openTime, tatOpenSeconds, recipientId]
-    );
-
-    await db.run(
-      `INSERT INTO tracking_logs (recipient_id, event_type, timestamp, ip_address, user_agent, details)
-       VALUES (?, 'OPEN', ?, '127.0.0.1 (Simulated)', 'Simulated Browser / Mail Client', ?)`,
-      [recipientId, openTime, JSON.stringify({ simulated: true, minutesDelay })]
-    );
-
-    res.json({
-      success: true,
-      recipientId,
-      first_opened_at: openTime,
-      tat_open_seconds: tatOpenSeconds,
-      tat_open_formatted: formatTAT(tatOpenSeconds)
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// -------------------------------------------------------------
+// PERMANENTLY DISABLED SIMULATION ENDPOINTS (HTTP 410 GONE)
+// -------------------------------------------------------------
+app.post('/api/simulate/open', (req, res) => {
+  return res.status(410).json({
+    error: 'Simulation mode has been permanently removed from MailPulse. Simulated open events are disabled. Real tracking pixels are required.'
+  });
 });
 
-app.post('/api/simulate/reply', async (req, res) => {
-  try {
-    const { recipientId, snippet, minutesDelay } = req.body;
-    const result = await simulateReply(recipientId, snippet, minutesDelay);
-    res.json({
-      success: true,
-      ...result,
-      tat_reply_formatted: formatTAT(result.tat_reply_seconds)
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.post('/api/simulate/reply', (req, res) => {
+  return res.status(410).json({
+    error: 'Simulation mode has been permanently removed from MailPulse. Simulated reply events are disabled. Real Gmail reply detection is required.'
+  });
 });
 
 // -------------------------------------------------------------
@@ -983,14 +959,15 @@ app.post('/api/sync/replies', async (req, res) => {
 app.get('/api/settings', async (req, res) => {
   try {
     const settings = await getSettings();
+    const isConnected = Boolean(settings.refreshToken && settings.userEmail);
     res.json({
       clientId: settings.clientId,
       clientSecret: settings.clientSecret ? '••••••••' : '',
       hasClientSecret: Boolean(settings.clientSecret),
       redirectUri: settings.redirectUri,
       userEmail: settings.userEmail,
-      mode: settings.mode,
-      isConnected: Boolean(settings.refreshToken && settings.userEmail)
+      mode: isConnected ? 'oauth' : 'disconnected',
+      isConnected
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -999,12 +976,11 @@ app.get('/api/settings', async (req, res) => {
 
 app.post('/api/settings', async (req, res) => {
   try {
-    const { clientId, clientSecret, redirectUri, mode } = req.body;
+    const { clientId, clientSecret, redirectUri } = req.body;
     const update = {};
     if (clientId !== undefined) update.clientId = clientId;
     if (clientSecret && clientSecret !== '••••••••') update.clientSecret = clientSecret;
     if (redirectUri !== undefined) update.redirectUri = redirectUri;
-    if (mode !== undefined) update.mode = mode;
 
     await saveSettings(update);
     res.json({ success: true, message: 'Settings saved successfully' });
@@ -1084,17 +1060,21 @@ app.get('/api/auth/google/callback', async (req, res) => {
   }
 });
 
-// Periodic background reply poller (every 60 seconds)
-setInterval(async () => {
-  try {
-    await syncReplies();
-  } catch (e) {
-    // silent background catch
-  }
-}, 60000);
+if (require.main === module) {
+  // Periodic background reply poller (every 60 seconds)
+  const pollerInterval = setInterval(async () => {
+    try {
+      await syncReplies();
+    } catch (e) {
+      // silent background catch
+    }
+  }, 60000);
+  if (pollerInterval.unref) pollerInterval.unref();
 
-startScheduler();
+  startScheduler();
+  app.listen(PORT, () => {
+    console.log(`MailTracking Backend running at http://localhost:${PORT}`);
+  });
+}
 
-app.listen(PORT, () => {
-  console.log(`MailTracking Backend running at http://localhost:${PORT}`);
-});
+module.exports = app;

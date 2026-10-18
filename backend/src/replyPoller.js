@@ -2,6 +2,7 @@ const { google } = require('googleapis');
 const { getDb } = require('./db');
 const { getSettings, getOAuth2Client } = require('./googleAuth');
 const { assignRecipient } = require('./assignmentEngine');
+const { getTestMockGmailClient } = require('./mailer');
 
 function decodeBase64Url(data) {
   if (!data) return '';
@@ -69,7 +70,7 @@ async function processThreadMessagesForRecipient(db, gmail, recipient) {
     });
 
     const messages = threadRes.data.messages || [];
-    const sentTime = new Date(recipient.sent_at).getTime();
+    const sentTime = recipient.sent_at ? new Date(recipient.sent_at).getTime() : 0;
     let updated = false;
 
     // Get existing recorded gmail_message_ids for this recipient to avoid duplicate insertions
@@ -90,7 +91,9 @@ async function processThreadMessagesForRecipient(db, gmail, recipient) {
         }
 
         const replyTime = new Date(msgInternalDate).toISOString();
-        const tatReplySeconds = Math.max(0, Math.floor((msgInternalDate - sentTime) / 1000));
+        const tatReplySeconds = recipient.sent_at && sentTime > 0
+          ? Math.max(0, Math.floor((msgInternalDate - sentTime) / 1000))
+          : null;
         const snippet = msg.snippet || 'Reply received';
         const senderInfo = parseSenderInfo(fromHeader, recipient.email);
         const { plainText } = extractMessageBodies(msg.payload);
@@ -179,9 +182,9 @@ async function syncReplies() {
   }
 
   let oauth2Client = null;
-  let gmail = null;
+  let gmail = typeof getTestMockGmailClient === 'function' ? getTestMockGmailClient() : null;
 
-  if (config.mode === 'oauth' && config.refreshToken) {
+  if (!gmail && config.refreshToken) {
     try {
       oauth2Client = await getOAuth2Client();
       if (oauth2Client) {
@@ -232,12 +235,16 @@ async function fetchRecipientReplyFromGmail(recipientId) {
 
   // If no replies in DB and gmail thread exists
   const config = await getSettings();
-  if (config.mode === 'oauth' && config.refreshToken && recipient.gmail_thread_id && !recipient.gmail_thread_id.startsWith('sim_thread_')) {
+  let gmail = typeof getTestMockGmailClient === 'function' ? getTestMockGmailClient() : null;
+  if (!gmail && config.refreshToken && recipient.gmail_thread_id && !recipient.gmail_thread_id.startsWith('sim_thread_')) {
     const oauth2Client = await getOAuth2Client();
     if (oauth2Client) {
-      const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-      await processThreadMessagesForRecipient(db, gmail, recipient);
+      gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     }
+  }
+
+  if (gmail && recipient.gmail_thread_id && !recipient.gmail_thread_id.startsWith('sim_thread_')) {
+    await processThreadMessagesForRecipient(db, gmail, recipient);
   }
 
   const freshRecipient = await db.get('SELECT * FROM recipients WHERE id = ?', [recipientId]);
@@ -253,93 +260,10 @@ async function fetchRecipientReplyFromGmail(recipientId) {
   };
 }
 
-async function simulateReply(recipientId, customSnippet, customMinutesDelay) {
-  const db = await getDb();
-  const recipient = await db.get('SELECT * FROM recipients WHERE id = ?', [recipientId]);
-
-  if (!recipient) {
-    throw new Error('Recipient not found');
-  }
-  if (!recipient.sent_at) {
-    throw new Error('Cannot simulate reply for an unsent recipient.');
-  }
-
-  const sentTime = new Date(recipient.sent_at).getTime();
-  let replyTimeMs = Date.now();
-
-  if (typeof customMinutesDelay === 'number' && !isNaN(customMinutesDelay)) {
-    replyTimeMs = sentTime + Math.max(0, customMinutesDelay * 60 * 1000);
-  }
-
-  const replyTime = new Date(replyTimeMs).toISOString();
-  const tatReplySeconds = Math.max(0, Math.floor((replyTimeMs - sentTime) / 1000));
-  const snippet = customSnippet || 'Thanks for the email! I have received it.';
-  const simMsgId = `sim_msg_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-  const senderName = recipient.name || recipient.email.split('@')[0];
-
-  await db.run(
-    `INSERT INTO recipient_replies 
-     (recipient_id, gmail_message_id, gmail_thread_id, sender_name, sender_email, received_at, body_text, body_html, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      recipient.id,
-      simMsgId,
-      recipient.gmail_thread_id || `sim_thread_${recipient.id}`,
-      senderName,
-      recipient.email,
-      replyTime,
-      snippet,
-      null,
-      new Date().toISOString()
-    ]
-  );
-
-  await db.run(
-    `UPDATE recipients 
-     SET status = 'REPLIED',
-         first_replied_at = COALESCE(first_replied_at, ?),
-         reply_count = reply_count + 1,
-         tat_reply_seconds = COALESCE(tat_reply_seconds, ?),
-         reply_snippet = ?,
-         latest_reply_message_id = ?,
-         latest_reply_sender_name = ?,
-         latest_reply_sender_email = ?,
-         latest_reply_body_text = ?
-     WHERE id = ?`,
-    [
-      replyTime,
-      tatReplySeconds,
-      snippet,
-      simMsgId,
-      senderName,
-      recipient.email,
-      snippet,
-      recipient.id
-    ]
-  );
-
-  await db.run(
-    `INSERT INTO tracking_logs (recipient_id, event_type, timestamp, details)
-     VALUES (?, 'REPLY', ?, ?)`,
-    [recipient.id, replyTime, JSON.stringify({ snippet, messageId: simMsgId, simulated: true })]
-  );
-
-  return {
-    recipientId,
-    email: recipient.email,
-    status: 'REPLIED',
-    first_replied_at: replyTime,
-    tat_reply_seconds: tatReplySeconds,
-    snippet,
-    latest_reply_sender_name: senderName,
-    latest_reply_body_text: snippet
-  };
-}
-
 module.exports = {
   syncReplies,
-  simulateReply,
   fetchRecipientReplyFromGmail,
+  processThreadMessagesForRecipient,
   extractMessageBodies,
   parseSenderInfo,
   decodeBase64Url

@@ -18,6 +18,9 @@ frontend/build/
 backend/database.sqlite
 backend/*.sqlite
 *.sqlite
+backend/*.sqlite*
+backend/*.backup*
+*.backup*
 
 # IDE & System
 .DS_Store

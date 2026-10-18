@@ -1,6 +1,6 @@
 const { google } = require('googleapis');
 const { getDb } = require('./db');
-const { sendSingleRecipient } = require('./mailer');
+const { sendSingleRecipient, getTestMockGmailClient } = require('./mailer');
 const { getSettings, getOAuth2Client } = require('./googleAuth');
 
 const WORKER_ID = `worker_${process.pid}_${Math.random().toString(36).substr(2, 9)}`;
@@ -46,8 +46,6 @@ async function processScheduledJobs() {
            continue;
         }
 
-        await db.run('UPDATE campaigns SET campaign_status = "sending" WHERE id = ?', [job.campaign_id]);
-
         const recipients = await db.all(
           `SELECT * FROM recipients WHERE campaign_id = ? AND send_status = 'pending'`,
           [job.campaign_id]
@@ -55,9 +53,9 @@ async function processScheduledJobs() {
 
         const config = await getSettings();
         let oauth2Client = null;
-        let gmail = null;
+        let gmail = typeof getTestMockGmailClient === 'function' ? getTestMockGmailClient() : null;
 
-        if (config.mode === 'oauth' && config.refreshToken) {
+        if (!gmail && config.refreshToken) {
           try {
             oauth2Client = await getOAuth2Client();
             if (oauth2Client) {
@@ -68,13 +66,30 @@ async function processScheduledJobs() {
           }
         }
 
+        if (!gmail) {
+          console.warn(`[Scheduler] Gmail disconnected at scheduled time for campaign ${job.campaign_id}. Failing job.`);
+          await db.run(
+            `UPDATE recipients SET send_status = 'failed', sent_at = NULL WHERE campaign_id = ? AND send_status = 'pending'`,
+            [job.campaign_id]
+          );
+          await db.run('UPDATE campaigns SET campaign_status = "failed", sent_at = NULL WHERE id = ?', [job.campaign_id]);
+          await db.run(
+            'UPDATE scheduled_jobs SET status = "failed", last_error = "Gmail account disconnected at execution time", updated_at = ? WHERE id = ?',
+            [now, job.id]
+          );
+          continue;
+        }
+
+        await db.run('UPDATE campaigns SET campaign_status = "sending" WHERE id = ?', [job.campaign_id]);
+
         const deptRows = await db.all('SELECT department_id FROM campaign_departments WHERE campaign_id = ?', [job.campaign_id]);
         const validDeptIds = deptRows.map(r => r.department_id);
 
         const host = process.env.PUBLIC_URL || 'http://localhost:5000'; // simplified
         const baseUrl = process.env.PUBLIC_URL || host;
 
-        let anyFailed = false;
+        let successCount = 0;
+        let failCount = 0;
 
         for (const recipient of recipients) {
           // Mark sending
@@ -89,14 +104,18 @@ async function processScheduledJobs() {
             config
           });
 
-          if (result.sendStatus === 'failed') anyFailed = true;
+          if (result.sendStatus === 'sent') {
+            successCount++;
+          } else {
+            failCount++;
+          }
         }
 
-        // Finalize campaign
-        const finalStatus = anyFailed ? 'completed_with_errors' : 'sent';
-        // Set sent_at to now for the campaign to denote when it actually finished
-        await db.run('UPDATE campaigns SET campaign_status = ?, sent_at = ? WHERE id = ?', [finalStatus, new Date().toISOString(), job.campaign_id]);
-        await db.run('UPDATE scheduled_jobs SET status = "completed", updated_at = ? WHERE id = ?', [new Date().toISOString(), job.id]);
+        // Finalize campaign accurately without fabricating sent_at if all failed
+        const finalStatus = successCount === 0 ? 'failed' : (failCount > 0 ? 'completed_with_errors' : 'sent');
+        const finalSentAt = successCount > 0 ? new Date().toISOString() : null;
+        await db.run('UPDATE campaigns SET campaign_status = ?, sent_at = ? WHERE id = ?', [finalStatus, finalSentAt, job.campaign_id]);
+        await db.run('UPDATE scheduled_jobs SET status = ?, updated_at = ? WHERE id = ?', [successCount > 0 ? 'completed' : 'failed', new Date().toISOString(), job.id]);
 
         console.log(`[Scheduler] Finished campaign ${job.campaign_id}`);
       } catch (jobErr) {
@@ -137,9 +156,9 @@ async function processFollowups() {
 
       const config = await getSettings();
       let oauth2Client = null;
-      let gmail = null;
+      let gmail = typeof getTestMockGmailClient === 'function' ? getTestMockGmailClient() : null;
 
-      if (config.mode === 'oauth' && config.refreshToken) {
+      if (!gmail && config.refreshToken) {
         try {
           oauth2Client = await getOAuth2Client();
           if (oauth2Client) {
@@ -148,6 +167,11 @@ async function processFollowups() {
         } catch (err) {
           console.warn('Failed to initialize Gmail API client for followup worker:', err.message);
         }
+      }
+
+      if (!gmail) {
+        console.warn('[Scheduler] Gmail disconnected, skipping followup dispatch');
+        continue;
       }
       
       const host = process.env.PUBLIC_URL || 'http://localhost:5000';
@@ -162,9 +186,9 @@ async function processFollowups() {
           
           await db.run(`UPDATE recipients SET followup_status = 'sending' WHERE id = ?`, [recipient.id]);
 
-          let sendStatus = 'sent';
+          let sendStatus = 'failed';
           
-          if (gmail && config.mode === 'oauth' && recipient.gmail_thread_id) {
+          if (recipient.gmail_thread_id) {
             try {
               const MailComposer = require('nodemailer/lib/mail-composer');
               const personalizedBody = template.body.replace(/\{\{\s*name\s*\}\}/gi, recipient.name).replace(/\{\{\s*email\s*\}\}/gi, recipient.email);
@@ -198,6 +222,7 @@ async function processFollowups() {
                    threadId: recipient.gmail_thread_id 
                 }
               });
+              sendStatus = 'sent';
             } catch (err) {
               console.error(`Error sending followup to ${recipient.email}:`, err.message);
               sendStatus = 'failed';

@@ -1,26 +1,41 @@
 const { google } = require('googleapis');
 const MailComposer = require('nodemailer/lib/mail-composer');
 const { getDb } = require('./db');
-const { getSettings, getOAuth2Client } = require('./googleAuth');
+const { getSettings, getOAuth2Client, checkGmailConnection } = require('./googleAuth');
 const { assignRecipient } = require('./assignmentEngine');
+
+// Isolated mock Gmail client for offline automated testing (not an HTTP endpoint)
+let testMockGmailClient = null;
+
+function setTestMockGmailClient(mockClient) {
+  testMockGmailClient = mockClient;
+}
+
+function getTestMockGmailClient() {
+  return testMockGmailClient;
+}
 
 async function sendSingleRecipient({ recipient, campaign, baseUrl, validDeptIds, gmailClient, config }) {
   const db = await getDb();
   const now = new Date().toISOString();
   
   // Build personalized body with tracking pixel
-  let personalizedBody = campaign.body.replace(/\{\{\s*name\s*\}\}/gi, recipient.name).replace(/\{\{\s*email\s*\}\}/gi, recipient.email);
+  let personalizedBody = campaign.body
+    .replace(/\{\{\s*name\s*\}\}/gi, recipient.name)
+    .replace(/\{\{\s*email\s*\}\}/gi, recipient.email);
 
   // Tracking pixel tag
   const pixelUrl = `${baseUrl}/api/track/pixel/${recipient.id}.png`;
   const pixelTag = `<img src="${pixelUrl}" width="1" height="1" style="display:none;width:1px;height:1px;" alt="" />`;
   const finalHtml = `${personalizedBody}<br/><br/>${pixelTag}`;
 
-  let threadId = `sim_thread_${recipient.id}_${Date.now()}`;
-  let messageId = `sim_msg_${recipient.id}_${Date.now()}`;
-  let sendStatus = 'sent';
+  let threadId = null;
+  let messageId = null;
+  let sendStatus = 'failed';
+  let sentAt = null;
+  let sendError = null;
 
-  if (gmailClient && config.mode === 'oauth') {
+  if (gmailClient) {
     try {
       const composer = new MailComposer({
         from: config.userEmail,
@@ -44,20 +59,38 @@ async function sendSingleRecipient({ recipient, campaign, baseUrl, validDeptIds,
         requestBody: { raw: rawBase64 }
       });
 
-      if (sendRes.data) {
-        messageId = sendRes.data.id || messageId;
-        threadId = sendRes.data.threadId || threadId;
+      if (sendRes && sendRes.data) {
+        messageId = sendRes.data.id || null;
+        threadId = sendRes.data.threadId || null;
+        sendStatus = 'sent';
+        sentAt = now;
+      } else {
+        throw new Error('Gmail API response did not contain message data');
       }
     } catch (sendErr) {
       console.error(`Error sending email via Gmail API to ${recipient.email}:`, sendErr.message);
       sendStatus = 'failed';
+      sentAt = null;
+      sendError = sendErr.message;
     }
+  } else {
+    sendError = 'Gmail client is disconnected or uninitialized';
   }
 
-  // Update recipient with thread, message ID, sent_at, and send_status
+  // Ensure failed sends cannot clear timestamps belonging to already successfully sent recipients
+  const finalSentAt = sentAt || recipient.sent_at || null;
+  const finalThreadId = threadId || recipient.gmail_thread_id || null;
+  const finalMessageId = messageId || recipient.gmail_message_id || null;
+  const finalSendStatus = (recipient.sent_at && sendStatus === 'failed') ? (recipient.send_status || 'sent') : sendStatus;
+
   await db.run(
-    `UPDATE recipients SET gmail_thread_id = ?, gmail_message_id = ?, sent_at = ?, send_status = ? WHERE id = ?`,
-    [threadId, messageId, now, sendStatus, recipient.id]
+    `UPDATE recipients 
+     SET gmail_thread_id = ?, 
+         gmail_message_id = ?, 
+         sent_at = ?, 
+         send_status = ? 
+     WHERE id = ?`,
+    [finalThreadId, finalMessageId, finalSentAt, finalSendStatus, recipient.id]
   );
 
   if (sendStatus === 'sent') {
@@ -72,7 +105,7 @@ async function sendSingleRecipient({ recipient, campaign, baseUrl, validDeptIds,
     }
   }
   
-  return { threadId, messageId, sendStatus, pixelUrl, sentAt: now };
+  return { threadId, messageId, sendStatus, pixelUrl, sentAt, error: sendError };
 }
 
 async function sendCampaign({ title, subject, body, recipients, baseUrl, departmentIds, scheduleAt, scheduleTimezone, templateId, followupEnabled, followupDays, followupTemplateId }) {
@@ -80,8 +113,27 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl, departm
   const config = await getSettings();
   const now = new Date().toISOString();
 
-  const campaignStatus = scheduleAt ? 'scheduled' : 'sent';
-  const sentAt = scheduleAt ? null : now;
+  // Validate Gmail connectivity before accepting Send Now or Schedule Later
+  const conn = await checkGmailConnection();
+  if (!conn.connected && !testMockGmailClient) {
+    throw new Error(conn.reason || 'Gmail account not connected. Please connect your Gmail account in Settings before dispatching.');
+  }
+
+  let oauth2Client = null;
+  let gmail = testMockGmailClient;
+
+  if (!scheduleAt && !gmail) {
+    oauth2Client = await getOAuth2Client();
+    if (oauth2Client) {
+      gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    }
+    if (!gmail) {
+      throw new Error('Could not initialize Gmail API client. Please verify Gmail credentials in Settings.');
+    }
+  }
+
+  const campaignStatus = scheduleAt ? 'scheduled' : 'sending';
+  const sentAt = scheduleAt ? null : null; // Will be set only upon successful dispatch
 
   // Insert Campaign
   const campaignResult = await db.run(
@@ -91,7 +143,7 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl, departm
       title || subject,
       subject,
       body,
-      config.userEmail || 'admin@groupmail.com',
+      config.userEmail || (conn.connected ? conn.email : 'admin@groupmail.com'),
       sentAt,
       recipients.length,
       scheduleAt || null,
@@ -122,37 +174,26 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl, departm
     );
   }
 
-  let oauth2Client = null;
-  let gmail = null;
-
-  if (!scheduleAt && config.mode === 'oauth' && config.refreshToken) {
-    try {
-      oauth2Client = await getOAuth2Client();
-      if (oauth2Client) {
-        gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-      }
-    } catch (err) {
-      console.warn('Failed to initialize Gmail API client, falling back to simulation mode:', err.message);
-    }
-  }
-
   const createdRecipients = [];
+  let successfulSends = 0;
+  let failedSends = 0;
+  let firstErrorMessage = null;
 
   for (const rec of recipients) {
     const email = (rec.email || rec).trim();
     const name = rec.name ? rec.name.trim() : email.split('@')[0];
 
-    const recStatus = scheduleAt ? 'pending' : 'sent';
+    const initialStatus = scheduleAt ? 'pending' : 'sending';
     
     // Insert Recipient record first to get recipientId
     const recResult = await db.run(
       `INSERT INTO recipients (campaign_id, email, name, status, send_status, sent_at)
-       VALUES (?, ?, ?, 'SENT', ?, ?)`,
-      [campaignId, email, name, recStatus, sentAt]
+       VALUES (?, ?, ?, 'SENT', ?, NULL)`,
+      [campaignId, email, name, initialStatus]
     );
     const recipientId = recResult.lastID;
 
-    let resData = { sendStatus: recStatus, pixelUrl: null, threadId: null, messageId: null, sentAt };
+    let resData = { sendStatus: initialStatus, pixelUrl: null, threadId: null, messageId: null, sentAt: null };
 
     if (!scheduleAt) {
       resData = await sendSingleRecipient({
@@ -163,6 +204,15 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl, departm
         gmailClient: gmail,
         config
       });
+
+      if (resData.sendStatus === 'sent') {
+        successfulSends++;
+      } else {
+        failedSends++;
+        if (!firstErrorMessage && resData.error) {
+          firstErrorMessage = resData.error;
+        }
+      }
     }
 
     createdRecipients.push({
@@ -179,18 +229,41 @@ async function sendCampaign({ title, subject, body, recipients, baseUrl, departm
     });
   }
 
+  if (!scheduleAt) {
+    if (successfulSends === 0 && failedSends > 0) {
+      // All sends failed: mark campaign failed and do NOT record sent_at
+      await db.run(
+        'UPDATE campaigns SET campaign_status = "failed", sent_at = NULL WHERE id = ?',
+        [campaignId]
+      );
+      throw new Error(`Sending failed for all recipients via Gmail: ${firstErrorMessage || 'Unknown Gmail sending error'}`);
+    } else {
+      const finalCampaignStatus = failedSends > 0 ? 'completed_with_errors' : 'sent';
+      const finalSentAt = new Date().toISOString();
+      await db.run(
+        'UPDATE campaigns SET campaign_status = ?, sent_at = ? WHERE id = ?',
+        [finalCampaignStatus, finalSentAt, campaignId]
+      );
+    }
+  }
+
   return {
     campaignId,
     title: title || subject,
     subject,
-    sent_at: sentAt,
+    sent_at: scheduleAt ? null : (successfulSends > 0 ? new Date().toISOString() : null),
     schedule_at: scheduleAt,
-    campaign_status: campaignStatus,
+    campaign_status: scheduleAt ? 'scheduled' : (failedSends > 0 ? 'completed_with_errors' : 'sent'),
     total_recipients: createdRecipients.length,
     recipients: createdRecipients,
     departments: validDeptIds,
-    mode: (!scheduleAt && gmail && config.mode === 'oauth') ? 'gmail_oauth' : (scheduleAt ? 'scheduled' : 'simulation')
+    mode: scheduleAt ? 'scheduled' : 'gmail_oauth'
   };
 }
 
-module.exports = { sendCampaign, sendSingleRecipient };
+module.exports = {
+  sendCampaign,
+  sendSingleRecipient,
+  setTestMockGmailClient,
+  getTestMockGmailClient
+};

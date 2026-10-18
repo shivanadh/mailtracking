@@ -25,8 +25,27 @@ async function getSettings() {
     redirectUri: result.redirectUri || process.env.REDIRECT_URI || 'https://mailtracking-backend.onrender.com/api/auth/google/callback',
     refreshToken: result.refreshToken || '',
     userEmail: result.userEmail || '',
-    mode: result.mode || 'simulation' // 'oauth' or 'simulation'
+    mode: Boolean(result.refreshToken && result.userEmail) ? 'oauth' : 'disconnected',
+    isConnected: Boolean(result.refreshToken && result.userEmail)
   };
+}
+
+async function checkGmailConnection() {
+  const config = await getSettings();
+  if (!config.clientId || !config.clientSecret || !config.refreshToken) {
+    return {
+      connected: false,
+      reason: 'Gmail account not connected. Please connect your Gmail account in Settings with Client ID, Secret, and OAuth authorization.'
+    };
+  }
+  const oauth2Client = await getOAuth2Client();
+  if (!oauth2Client) {
+    return {
+      connected: false,
+      reason: 'Failed to initialize Gmail OAuth2 client. Please verify credentials in Settings.'
+    };
+  }
+  return { connected: true, email: config.userEmail, oauth2Client };
 }
 
 async function saveSettings(settings) {
@@ -116,5 +135,6 @@ module.exports = {
   saveSettings,
   getOAuth2Client,
   generateAuthUrl,
-  handleAuthCallback
+  handleAuthCallback,
+  checkGmailConnection
 };

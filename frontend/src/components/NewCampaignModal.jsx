@@ -80,6 +80,7 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
   const [aiSuggestedDetails, setAiSuggestedDetails] = useState([]);
   const [isPreviewReviewed, setIsPreviewReviewed] = useState(false);
   const [senderEmail, setSenderEmail] = useState('');
+  const [isGmailConnected, setIsGmailConnected] = useState(true);
 
   useEffect(() => {
     if (isOpen) {
@@ -98,6 +99,7 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
         if (data && data.userEmail) {
           setSenderEmail(data.userEmail);
         }
+        setIsGmailConnected(Boolean(data?.isConnected));
       }
     } catch (e) {
       // non-critical
@@ -307,6 +309,10 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
   const unresolvedPlaceholders = findUnresolvedPlaceholders(`${subject} ${body}`);
 
   const handleSend = async () => {
+    if (!isGmailConnected) {
+      setError('Gmail is not connected. Please connect your Gmail account in Settings before dispatching or scheduling campaigns.');
+      return;
+    }
     if (!subject.trim()) {
       setError('Please provide a campaign subject line.');
       setActiveTab('compose');
@@ -475,6 +481,15 @@ export default function NewCampaignModal({ isOpen, onClose, onCampaignCreated })
               <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm flex items-center gap-2.5">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span>{error}</span>
+              </div>
+            )}
+
+            {!isGmailConnected && (
+              <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>Gmail is disconnected. Please connect your Google account in Settings before sending or scheduling campaigns.</span>
+                </div>
               </div>
             )}
 
