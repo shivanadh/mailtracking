@@ -69,10 +69,24 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
   // Process logging asynchronously
   if (isNaN(recipientId)) return;
 
+  // Check if this request is a preview or test inspection request
+  const isPreview = req.query.preview === 'true' || 
+                    req.headers['x-purpose'] === 'preview' || 
+                    req.headers['x-mailtrack-preview'] === 'true' ||
+                    req.headers['purpose'] === 'preview';
+  if (isPreview) return;
+
   try {
     const db = await getDb();
     const recipient = await db.get('SELECT * FROM recipients WHERE id = ?', [recipientId]);
     if (!recipient) return;
+
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+    const purposeHeader = (req.headers['purpose'] || req.headers['sec-purpose'] || '').toLowerCase();
+    const isPrefetch = purposeHeader.includes('prefetch');
+    
+    // Detect suspected automated requests / proxy crawlers with reasonable evidence
+    const isSuspectedAutomated = /GoogleImageProxy|YahooMailProxy|bot|crawler|spider|curl|wget|scanner|probe|headless|barracuda|proofpoint|mimecast/i.test(userAgent) || isPrefetch;
 
     const now = new Date().toISOString();
     const nowMs = Date.now();
@@ -86,6 +100,7 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
       tatOpenSeconds = Math.max(0, Math.floor((nowMs - sentMs) / 1000));
     }
 
+    // Opening an email must NOT mark it replied or actioned
     const newStatus = recipient.status === 'SENT' ? 'OPENED' : recipient.status;
 
     await db.run(
@@ -100,12 +115,20 @@ app.get('/api/track/pixel/:recipientId.png', async (req, res) => {
     );
 
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    const userAgent = req.headers['user-agent'] || 'Unknown';
+
+    const logDetails = {
+      isFirstOpen,
+      totalOpens: recipient.open_count + 1,
+      isSuspectedAutomated: Boolean(isSuspectedAutomated)
+    };
+    if (isSuspectedAutomated) {
+      logDetails.automationEvidence = isPrefetch ? 'Prefetch request header detected' : `Suspected automated User-Agent: ${userAgent}`;
+    }
 
     await db.run(
       `INSERT INTO tracking_logs (recipient_id, event_type, timestamp, ip_address, user_agent, details)
        VALUES (?, 'OPEN', ?, ?, ?, ?)`,
-      [recipientId, now, ip, userAgent, JSON.stringify({ isFirstOpen, totalOpens: recipient.open_count + 1 })]
+      [recipientId, now, ip, userAgent, JSON.stringify(logDetails)]
     );
   } catch (err) {
     console.error(`Error logging pixel open for recipient ${recipientId}:`, err.message);
@@ -184,7 +207,7 @@ app.get('/api/campaigns', async (req, res) => {
     const campaigns = await db.all(`
       SELECT c.*,
         COUNT(r.id) as total_recipients,
-        SUM(CASE WHEN r.status IN ('OPENED', 'REPLIED') THEN 1 ELSE 0 END) as opened_count,
+        SUM(CASE WHEN (r.open_count > 0 OR r.first_opened_at IS NOT NULL) THEN 1 ELSE 0 END) as opened_count,
         SUM(CASE WHEN r.status = 'REPLIED' THEN 1 ELSE 0 END) as replied_count,
         AVG(r.tat_open_seconds) as avg_tat_open_seconds,
         AVG(r.tat_reply_seconds) as avg_tat_reply_seconds
@@ -265,8 +288,8 @@ app.get('/api/campaigns/:id', async (req, res) => {
       });
     }
 
-    // Campaign metrics
-    const openedCount = recipients.filter(r => r.status === 'OPENED' || r.status === 'REPLIED').length;
+    // Campaign metrics: count only recipients with verified tracked opens
+    const openedCount = recipients.filter(r => (r.open_count > 0 || r.first_opened_at !== null)).length;
     const repliedCount = recipients.filter(r => r.status === 'REPLIED').length;
 
     const openTats = recipients.filter(r => r.tat_open_seconds !== null).map(r => r.tat_open_seconds);

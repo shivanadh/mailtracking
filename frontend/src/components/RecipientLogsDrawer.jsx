@@ -207,7 +207,7 @@ export default function RecipientLogsDrawer({
                           <th className="py-3 px-4">Sent Time</th>
                           <th className="py-3 px-4">Waiting TAT</th>
                           <th className="py-3 px-4">SLA Status</th>
-                          <th className="py-3 px-4">First Opened</th>
+                          <th className="py-3 px-4">First Tracked Open</th>
                         </>
                       )}
                       <th className="py-3 px-4 text-right">Action</th>
@@ -297,7 +297,7 @@ export default function RecipientLogsDrawer({
                               )}
                             </td>
                             <td className="py-3.5 px-4 text-slate-400 font-mono text-[11px]">
-                              {r.first_opened_at ? formatDate(r.first_opened_at) : 'Not Opened'}
+                              {r.first_opened_at ? formatDate(r.first_opened_at) : 'No tracked open'}
                             </td>
                           </>
                         )}

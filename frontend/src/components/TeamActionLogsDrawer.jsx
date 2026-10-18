@@ -295,14 +295,14 @@ export default function TeamActionLogsDrawer({
                           <th className="py-3 px-4 font-semibold text-center">Sent Time</th>
                           <th className="py-3 px-4 font-semibold text-center">Pending TAT</th>
                           <th className="py-3 px-4 font-semibold text-center">SLA Status</th>
-                          <th className="py-3 px-4 font-semibold text-center">First Opened</th>
+                          <th className="py-3 px-4 font-semibold text-center">First Tracked Open</th>
                         </>
                       ) : (
                         <>
                           <th className="py-3 px-4 font-semibold text-center">Actioned Time</th>
                           <th className="py-3 px-4 font-semibold text-center">Action TAT</th>
-                          <th className="py-3 px-4 font-semibold text-center">First Opened</th>
-                          <th className="py-3 px-4 font-semibold text-center">Open Count</th>
+                          <th className="py-3 px-4 font-semibold text-center">First Tracked Open</th>
+                          <th className="py-3 px-4 font-semibold text-center">Tracked Opens</th>
                         </>
                       )}
                       <th className="py-3 px-4 font-semibold text-right">Action</th>
@@ -403,7 +403,7 @@ export default function TeamActionLogsDrawer({
 
                               {/* First Opened */}
                               <td className="py-3.5 px-4 text-center text-slate-400 text-[11px]">
-                                {log.first_opened_at ? formatDate(log.first_opened_at) : <span className="text-slate-600">Not opened</span>}
+                                {log.first_opened_at ? formatDate(log.first_opened_at) : <span className="text-slate-600">No tracked open</span>}
                               </td>
 
                               {/* Action */}
@@ -428,7 +428,7 @@ export default function TeamActionLogsDrawer({
 
                               {/* First Opened */}
                               <td className="py-3.5 px-4 text-center text-slate-400 text-[11px]">
-                                {log.first_opened_at ? formatDate(log.first_opened_at) : <span className="text-slate-600">Direct reply</span>}
+                                {log.first_opened_at ? formatDate(log.first_opened_at) : <span className="text-slate-600">Direct reply (no tracked open)</span>}
                               </td>
 
                               {/* Open Count */}

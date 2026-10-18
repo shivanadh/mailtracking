@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   ArrowLeft, RefreshCw, Eye, MessageSquare, Clock, Zap, CheckCircle2, 
-  Mail, Play, History, Globe, Shield, Sparkles, Filter, Trash2, ChevronRight 
+  Mail, Play, History, Globe, Shield, Sparkles, Filter, Trash2, ChevronRight, AlertTriangle 
 } from 'lucide-react';
 import ReplyDrawer from './ReplyDrawer';
 import { DepartmentBadge, AssignmentBadge } from './DepartmentManager';
@@ -275,10 +275,10 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
 
             <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5">
               <div className="text-xs text-sky-400 font-medium flex items-center gap-1">
-                <Eye className="w-3.5 h-3.5" /> Opened
+                <Eye className="w-3.5 h-3.5" /> Tracked Opens
               </div>
               <div className="text-xl font-bold text-white mt-1">{metrics.opened_count} <span className="text-xs text-slate-400 font-normal">({metrics.open_rate}%)</span></div>
-              <div className="text-[11px] text-slate-500">Unique Opens</div>
+              <div className="text-[11px] text-slate-500">Unique Tracked Opens</div>
             </div>
 
             <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5">
@@ -294,7 +294,7 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                 <Clock className="w-3.5 h-3.5" /> Avg Open TAT
               </div>
               <div className="text-lg font-bold text-sky-300 mt-1">{metrics.avg_tat_open_formatted}</div>
-              <div className="text-[11px] text-slate-500">Time to First Open</div>
+              <div className="text-[11px] text-slate-500">Time to First Tracked Open</div>
             </div>
 
             <div className="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5">
@@ -364,9 +364,9 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
               <tr>
                 <th className="px-5 py-3.5 font-semibold">Recipient</th>
                 <th className="px-4 py-3.5 font-semibold">Status</th>
-                <th className="px-4 py-3.5 font-semibold">First Open & TAT</th>
+                <th className="px-4 py-3.5 font-semibold">First Tracked Open & TAT</th>
                 <th className="px-4 py-3.5 font-semibold">First Reply & TAT</th>
-                <th className="px-4 py-3.5 font-semibold text-center">Opens</th>
+                <th className="px-4 py-3.5 font-semibold text-center">Tracked Opens</th>
                 <th className="px-5 py-3.5 font-semibold text-right">Simulation & Actions</th>
               </tr>
             </thead>
@@ -424,7 +424,7 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                           </div>
                         </div>
                       ) : (
-                        <span className="text-xs text-slate-500 italic">Not opened yet</span>
+                        <span className="text-xs text-slate-500 italic">No tracked open</span>
                       )}
                     </td>
 
@@ -572,11 +572,29 @@ export default function CampaignDetail({ campaignId, onBack, onDeleteCampaign })
                           </div>
                         )}
 
-                        {log.details && (
-                          <div className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded border border-slate-800/60 mt-2 font-mono">
-                            {log.details}
-                          </div>
-                        )}
+                        {(() => {
+                          let parsedDetails = null;
+                          if (log.details) {
+                            try {
+                              parsedDetails = typeof log.details === 'string' ? JSON.parse(log.details) : log.details;
+                            } catch (e) {}
+                          }
+                          return (
+                            <>
+                              {parsedDetails?.isSuspectedAutomated && (
+                                <div className="mt-1 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+                                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                                  <span>Suspected Automated / Proxy Retrieval</span>
+                                </div>
+                              )}
+                              {log.details && (
+                                <div className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded border border-slate-800/60 mt-2 font-mono">
+                                  {log.details}
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   ))}

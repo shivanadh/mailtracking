@@ -392,14 +392,14 @@ export default function Dashboard({
 
         <div className="glass-panel glass-panel-hover rounded-2xl p-5 relative overflow-hidden">
           <div className="flex items-center justify-between text-slate-400 text-xs font-semibold uppercase tracking-wider">
-            <span>Overall Open Rate</span>
+            <span>Overall Tracked Open Rate</span>
             <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400">
               <Eye className="w-4 h-4" />
             </div>
           </div>
           <div className="text-3xl font-extrabold text-sky-400 mt-3">{overallOpenRate}%</div>
           <div className="text-xs text-slate-400 mt-1">
-            <span className="text-white font-semibold">{totalOpened}</span> of {totalRecipients} opened
+            <span className="text-white font-semibold">{totalOpened}</span> of {totalRecipients} tracked opens
           </div>
         </div>
 
@@ -442,7 +442,7 @@ export default function Dashboard({
                 <BarChart2 className="w-4 h-4 text-sky-400" />
                 Campaign Engagement Trend
               </h3>
-              <p className="text-xs text-slate-400">Recipients, Opens, and Replies across recent campaigns</p>
+              <p className="text-xs text-slate-400">Recipients, Tracked Opens, and Replies across recent campaigns</p>
             </div>
           </div>
 
@@ -505,7 +505,7 @@ export default function Dashboard({
                 />
                 <Bar 
                   dataKey="Opened" 
-                  name="Opened" 
+                  name="Tracked Opens" 
                   fill="#3b82f6" 
                   radius={[4, 4, 0, 0]} 
                 />
@@ -537,9 +537,9 @@ export default function Dashboard({
                 <th className="px-5 py-3.5 font-semibold">Subject & Campaign</th>
                 <th className="px-4 py-3.5 font-semibold">Sent Date</th>
                 <th className="px-4 py-3.5 font-semibold text-center">Recipients</th>
-                <th className="px-4 py-3.5 font-semibold text-center">Open Rate</th>
+                <th className="px-4 py-3.5 font-semibold text-center">Tracked Open Rate</th>
                 <th className="px-4 py-3.5 font-semibold text-center">Reply Rate</th>
-                <th className="px-4 py-3.5 font-semibold">Avg Open TAT</th>
+                <th className="px-4 py-3.5 font-semibold">Avg Tracked Open TAT</th>
                 <th className="px-4 py-3.5 font-semibold">Avg Reply TAT</th>
                 <th className="px-5 py-3.5 font-semibold text-right">Action</th>
               </tr>
